@@ -23,7 +23,7 @@ sealed interface NarrativeInstruction {
 data class CallFunctionInstruction(
     val functionId: String,
     val arguments: List<NarrativeExpression>,
-    val resultSlot: Int? = null,
+    val resultTarget: NarrativeResultTarget? = null,
     override val position: SourcePosition? = null,
 ) : NarrativeInstruction
 
@@ -68,6 +68,11 @@ data class BinaryExpression(
     val right: NarrativeExpression,
 ) : NarrativeExpression
 
+sealed interface NarrativeResultTarget {
+    data class Variable(val name: String) : NarrativeResultTarget
+    data class Slot(val slot: Int) : NarrativeResultTarget
+}
+
 enum class NarrativeBinaryOperator {
     Add,
     Subtract,
@@ -100,19 +105,20 @@ data class NarrativeTaskState(
     val id: String,
     val instructionPointer: Int = 0,
     val localVariables: Map<String, NarrativeValue> = emptyMap(),
-    val slots: Map<Int, NarrativeValue> = emptyMap(),
+    val slots: Map<Int, NarrativeSlotValue> = emptyMap(),
     val status: NarrativeTaskStatus = NarrativeTaskStatus.Ready,
 )
+
+sealed interface NarrativeSlotValue {
+    data class Value(val value: NarrativeValue) : NarrativeSlotValue
+    data class VariableReference(val name: String) : NarrativeSlotValue
+}
 
 sealed interface NarrativeTaskStatus {
     data object Ready : NarrativeTaskStatus
     data class SuspendedCall(
-        val effectId: String,
-        val functionId: String,
-        val resultSlot: Int?,
+        val resultTarget: NarrativeResultTarget?,
         val nextInstructionPointer: Int,
-        val payload: NarrativeFunctionEffectPayload,
-        val continuation: NarrativeFunctionStateSnapshot,
     ) : NarrativeTaskStatus
     data object Completed : NarrativeTaskStatus
 }
@@ -123,24 +129,6 @@ data class ChoiceOptionSnapshot(
     val text: String,
     val target: Int,
 )
-
-sealed interface NarrativeEffect {
-    val effectId: String
-    val taskId: String
-}
-
-data class FunctionEffect(
-    override val effectId: String,
-    override val taskId: String,
-    val functionId: String,
-    val payload: NarrativeFunctionEffectPayload,
-) : NarrativeEffect
-
-sealed interface NarrativeStepResult {
-    data class EffectEmitted(val state: NarrativeState, val effect: NarrativeEffect) : NarrativeStepResult
-    data class Advanced(val state: NarrativeState) : NarrativeStepResult
-    data class Completed(val state: NarrativeState) : NarrativeStepResult
-}
 
 @Serializable
 data class NarrativeStateSnapshot(
@@ -154,7 +142,7 @@ data class NarrativeTaskSnapshot(
     val id: String,
     val instructionPointer: Int,
     val localVariables: Map<String, @Polymorphic NarrativeValueSnapshot>,
-    val slots: Map<Int, @Polymorphic NarrativeValueSnapshot>,
+    val slots: Map<Int, NarrativeSlotSnapshot>,
     val status: NarrativeTaskStatusSnapshot,
 )
 
@@ -165,12 +153,8 @@ sealed interface NarrativeTaskStatusSnapshot {
 
     @Serializable
     data class SuspendedCall(
-        val effectId: String,
-        val functionId: String,
-        val resultSlot: Int?,
+        val resultTarget: NarrativeResultTargetSnapshot?,
         val nextInstructionPointer: Int,
-        val payload: @Polymorphic NarrativeFunctionEffectPayload,
-        val continuation: @Polymorphic NarrativeFunctionStateSnapshot,
     ) : NarrativeTaskStatusSnapshot
 
     @Serializable
@@ -178,27 +162,22 @@ sealed interface NarrativeTaskStatusSnapshot {
 }
 
 @Serializable
-abstract class NarrativeFunctionStateSnapshot
+sealed interface NarrativeResultTargetSnapshot {
+    @Serializable
+    data class Variable(val name: String) : NarrativeResultTargetSnapshot
+
+    @Serializable
+    data class Slot(val slot: Int) : NarrativeResultTargetSnapshot
+}
 
 @Serializable
-@SerialName("empty_function_state")
-data object EmptyFunctionStateSnapshot : NarrativeFunctionStateSnapshot()
+sealed interface NarrativeSlotSnapshot {
+    @Serializable
+    data class VariableReference(val name: String) : NarrativeSlotSnapshot
 
-@Serializable
-abstract class NarrativeFunctionEffectPayload
-
-@Serializable
-@SerialName("say_effect")
-data class SayEffectPayload(
-    val speaker: @Polymorphic NarrativeValueSnapshot?,
-    val text: String,
-) : NarrativeFunctionEffectPayload()
-
-@Serializable
-@SerialName("choice_effect")
-data class ChoiceEffectPayload(
-    val options: List<ChoiceOptionSnapshot>,
-) : NarrativeFunctionEffectPayload()
+    @Serializable
+    data class Value(val value: @Polymorphic NarrativeValueSnapshot) : NarrativeSlotSnapshot
+}
 
 interface NarrativeFunctionResponse {
     data object Ack : NarrativeFunctionResponse
@@ -217,79 +196,42 @@ data class DefaultNarrativeFunctionContext(
     override val task: NarrativeTaskState,
 ) : NarrativeFunctionContext, NarrativeFunctionDispatchContext
 
-sealed interface NarrativeFunctionResult<out S : NarrativeFunctionStateSnapshot, out P : NarrativeFunctionEffectPayload> {
-    data class Returned<out S : NarrativeFunctionStateSnapshot, out P : NarrativeFunctionEffectPayload>(
+sealed interface NarrativeFunctionResult {
+    data class Returned(
         val value: NarrativeValue = NarrativeValue.Null,
-    ) : NarrativeFunctionResult<S, P>
+    ) : NarrativeFunctionResult
 
-    data class Suspended<out S : NarrativeFunctionStateSnapshot, out P : NarrativeFunctionEffectPayload>(
-        val payload: P,
-        val continuation: S,
-    ) : NarrativeFunctionResult<S, P>
+    data object Suspended : NarrativeFunctionResult
 }
 
-interface NarrativeFunctionDefinition<S : NarrativeFunctionStateSnapshot, P : NarrativeFunctionEffectPayload> {
+interface NarrativeFunctionDefinition {
     val id: String
-    val stateSnapshotClass: KClass<S>
-    val stateSnapshotSerializer: KSerializer<S>
-    val payloadClass: KClass<P>
-    val payloadSerializer: KSerializer<P>
 
-    suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult<S, P>
+    suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult
 
     suspend fun resumeCall(
-        continuation: S,
+        arguments: List<NarrativeValue>,
         response: NarrativeFunctionResponse?,
         context: NarrativeFunctionContext,
-    ): NarrativeFunctionResult<S, P>
+    ): NarrativeFunctionResult
 
     fun dispatch(
-        payload: P,
+        arguments: List<NarrativeValue>,
         context: NarrativeFunctionDispatchContext,
         resume: (NarrativeFunctionResponse?) -> Unit,
     )
 }
 
 data class NarrativeFunctionRegistry(
-    private val functionsById: Map<String, NarrativeFunctionDefinition<out NarrativeFunctionStateSnapshot, out NarrativeFunctionEffectPayload>>,
+    private val functionsById: Map<String, NarrativeFunctionDefinition>,
 ) {
-    constructor(functions: List<NarrativeFunctionDefinition<out NarrativeFunctionStateSnapshot, out NarrativeFunctionEffectPayload>>) : this(
+    constructor(functions: List<NarrativeFunctionDefinition>) : this(
         functions.associateBy { it.id },
     )
 
-    fun definition(id: String): NarrativeFunctionDefinition<out NarrativeFunctionStateSnapshot, out NarrativeFunctionEffectPayload> {
+    fun definition(id: String): NarrativeFunctionDefinition {
         return functionsById[id]
             ?: throw IllegalArgumentException("No narrative function is registered for id `$id`")
-    }
-
-    fun serializersModule(): SerializersModule {
-        val uniqueStateDefinitions = functionsById.values
-            .distinctBy { it.stateSnapshotClass }
-        val uniquePayloadDefinitions = functionsById.values
-            .distinctBy { it.payloadClass }
-        return SerializersModule {
-            polymorphic(NarrativeFunctionStateSnapshot::class) {
-                subclass(EmptyFunctionStateSnapshot::class, EmptyFunctionStateSnapshot.serializer())
-                uniqueStateDefinitions.forEach {
-                    @Suppress("UNCHECKED_CAST")
-                    subclass(
-                        it.stateSnapshotClass as KClass<NarrativeFunctionStateSnapshot>,
-                        it.stateSnapshotSerializer as KSerializer<NarrativeFunctionStateSnapshot>,
-                    )
-                }
-            }
-            polymorphic(NarrativeFunctionEffectPayload::class) {
-                subclass(SayEffectPayload::class, SayEffectPayload.serializer())
-                subclass(ChoiceEffectPayload::class, ChoiceEffectPayload.serializer())
-                uniquePayloadDefinitions.forEach {
-                    @Suppress("UNCHECKED_CAST")
-                    subclass(
-                        it.payloadClass as KClass<NarrativeFunctionEffectPayload>,
-                        it.payloadSerializer as KSerializer<NarrativeFunctionEffectPayload>,
-                    )
-                }
-            }
-        }
     }
 }
 

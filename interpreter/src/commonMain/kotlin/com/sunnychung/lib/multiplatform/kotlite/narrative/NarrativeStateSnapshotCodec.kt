@@ -1,11 +1,10 @@
 package com.sunnychung.lib.multiplatform.kotlite.narrative
 
 import kotlinx.serialization.modules.SerializersModule
-import kotlinx.serialization.modules.plus
 
 class NarrativeStateSnapshotCodec(
     private val valueCodecs: NarrativeValueCodecRegistry = NarrativeValueCodecRegistry(emptyList()),
-    private val functionRegistry: NarrativeFunctionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
+    functionRegistry: NarrativeFunctionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
 ) {
 
     fun serialize(state: NarrativeState): NarrativeStateSnapshot {
@@ -17,7 +16,7 @@ class NarrativeStateSnapshotCodec(
                     id = task.id,
                     instructionPointer = task.instructionPointer,
                     localVariables = task.localVariables.mapValues { (_, value) -> serializeValue(value) },
-                    slots = task.slots.mapValues { (_, value) -> serializeValue(value) },
+                    slots = task.slots.mapValues { (_, value) -> serializeSlot(value) },
                     status = serializeStatus(task.status),
                 )
             },
@@ -36,7 +35,7 @@ class NarrativeStateSnapshotCodec(
                     id = task.id,
                     instructionPointer = task.instructionPointer,
                     localVariables = task.localVariables.mapValues { (_, value) -> restoreValue(value, context) },
-                    slots = task.slots.mapValues { (_, value) -> restoreValue(value, context) },
+                    slots = task.slots.mapValues { (_, value) -> restoreSlot(value, context) },
                     status = restoreStatus(task.status),
                 )
             },
@@ -44,7 +43,7 @@ class NarrativeStateSnapshotCodec(
     }
 
     fun serializersModule(): SerializersModule {
-        return valueCodecs.serializersModule() + functionRegistry.serializersModule()
+        return valueCodecs.serializersModule()
     }
 
     private fun serializeValue(value: NarrativeValue): NarrativeValueSnapshot {
@@ -82,16 +81,29 @@ class NarrativeStateSnapshotCodec(
         }
     }
 
+    private fun serializeSlot(slot: NarrativeSlotValue): NarrativeSlotSnapshot {
+        return when (slot) {
+            is NarrativeSlotValue.Value -> NarrativeSlotSnapshot.Value(serializeValue(slot.value))
+            is NarrativeSlotValue.VariableReference -> NarrativeSlotSnapshot.VariableReference(slot.name)
+        }
+    }
+
+    private suspend fun restoreSlot(
+        slot: NarrativeSlotSnapshot,
+        context: NarrativeValueRestoreContext,
+    ): NarrativeSlotValue {
+        return when (slot) {
+            is NarrativeSlotSnapshot.Value -> NarrativeSlotValue.Value(restoreValue(slot.value, context))
+            is NarrativeSlotSnapshot.VariableReference -> NarrativeSlotValue.VariableReference(slot.name)
+        }
+    }
+
     private fun serializeStatus(status: NarrativeTaskStatus): NarrativeTaskStatusSnapshot {
         return when (status) {
             NarrativeTaskStatus.Ready -> NarrativeTaskStatusSnapshot.Ready
             is NarrativeTaskStatus.SuspendedCall -> NarrativeTaskStatusSnapshot.SuspendedCall(
-                effectId = status.effectId,
-                functionId = status.functionId,
-                resultSlot = status.resultSlot,
+                resultTarget = serializeResultTarget(status.resultTarget),
                 nextInstructionPointer = status.nextInstructionPointer,
-                payload = status.payload,
-                continuation = status.continuation,
             )
             NarrativeTaskStatus.Completed -> NarrativeTaskStatusSnapshot.Completed
         }
@@ -101,14 +113,26 @@ class NarrativeStateSnapshotCodec(
         return when (status) {
             NarrativeTaskStatusSnapshot.Ready -> NarrativeTaskStatus.Ready
             is NarrativeTaskStatusSnapshot.SuspendedCall -> NarrativeTaskStatus.SuspendedCall(
-                effectId = status.effectId,
-                functionId = status.functionId,
-                resultSlot = status.resultSlot,
+                resultTarget = restoreResultTarget(status.resultTarget),
                 nextInstructionPointer = status.nextInstructionPointer,
-                payload = status.payload,
-                continuation = status.continuation,
             )
             NarrativeTaskStatusSnapshot.Completed -> NarrativeTaskStatus.Completed
+        }
+    }
+
+    private fun serializeResultTarget(target: NarrativeResultTarget?): NarrativeResultTargetSnapshot? {
+        return when (target) {
+            null -> null
+            is NarrativeResultTarget.Variable -> NarrativeResultTargetSnapshot.Variable(target.name)
+            is NarrativeResultTarget.Slot -> NarrativeResultTargetSnapshot.Slot(target.slot)
+        }
+    }
+
+    private fun restoreResultTarget(target: NarrativeResultTargetSnapshot?): NarrativeResultTarget? {
+        return when (target) {
+            null -> null
+            is NarrativeResultTargetSnapshot.Variable -> NarrativeResultTarget.Variable(target.name)
+            is NarrativeResultTargetSnapshot.Slot -> NarrativeResultTarget.Slot(target.slot)
         }
     }
 }

@@ -1,6 +1,6 @@
 plugins {
     kotlin("multiplatform")
-    id("com.android.application")
+    kotlin("plugin.serialization")
 }
 
 repositories {
@@ -9,17 +9,14 @@ repositories {
 }
 
 kotlin {
+    jvm {
+        jvmToolchain(8)
+        withJava()
+    }
+
     js {
         browser()
         binaries.executable()
-    }
-
-    androidTarget {
-        compilations.all {
-            kotlinOptions {
-                jvmTarget = "1.8"
-            }
-        }
     }
 
     listOf(
@@ -36,8 +33,15 @@ kotlin {
     sourceSets {
         val commonMain by getting {
             dependencies {
-                implementation("io.github.sunny-chung:kotlite-interpreter:1.1.2")
-                implementation("io.github.sunny-chung:kotlite-stdlib:1.1.0")
+                implementation(project(":kotlite-interpreter"))
+                implementation(project(":kotlite-stdlib"))
+            }
+        }
+        val jvmMain by getting {
+            dependencies {
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-cbor:1.6.3")
             }
         }
         val jsMain by getting
@@ -45,14 +49,24 @@ kotlin {
     }
 }
 
-android {
-    namespace = "com.sunnychung.lib.android.kotlite.interpreter.demo"
-    compileSdk = 34
+tasks.register<Jar>("jvmFatJar") {
+    group = "distribution"
+    description = "Builds a runnable JVM demo jar with all dependencies."
+    archiveClassifier.set("all")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 
-    defaultConfig {
-        applicationId = "com.sunnychung.lib.android.kotlite.interpreter.demo"
-        minSdk = 24
-        targetSdk = 34
-        versionCode = 1
+    manifest {
+        attributes["Main-Class"] = "ru.hollowhorizon.narrate.DemoKt"
     }
+
+    val jvmTarget = kotlin.targets.getByName("jvm")
+    val mainCompilation = jvmTarget.compilations.getByName("main")
+
+    dependsOn(mainCompilation.compileTaskProvider)
+    from(mainCompilation.output)
+    from({
+        mainCompilation.runtimeDependencyFiles?.map { file ->
+            if (file.isDirectory) file else zipTree(file)
+        }
+    })
 }

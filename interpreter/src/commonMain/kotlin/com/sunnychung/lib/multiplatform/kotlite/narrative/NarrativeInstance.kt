@@ -21,10 +21,11 @@ class NarrativeInstance(
     coroutineScope: CoroutineScope? = null,
 ) {
 
+    private val ownsScope = coroutineScope == null
     private val scope = coroutineScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mutex = Mutex()
     private val completion = CompletableDeferred<Unit>()
-    private val inFlightEffects = mutableSetOf<String>()
+    private val inFlightTasks = mutableSetOf<String>()
     private var currentState: NarrativeState = initialState
     private var executionJob: Job? = null
     private var cancelled = false
@@ -46,7 +47,9 @@ class NarrativeInstance(
     fun cancel() {
         cancelled = true
         executionJob?.cancel()
-        scope.cancel()
+        if (ownsScope) {
+            scope.cancel()
+        }
         if (!completion.isCompleted) {
             completion.complete(Unit)
         }
@@ -105,10 +108,7 @@ class NarrativeInstance(
                         is SetVariableInstruction -> {
                             currentState = currentState.updateTask(
                                 index = taskIndex,
-                                task = task.copy(
-                                    instructionPointer = task.instructionPointer + 1,
-                                    localVariables = task.localVariables + (instruction.name to evaluateExpression(currentState, task, instruction.expression)),
-                                ),
+                                task = applySetVariableInstruction(task, instruction),
                             )
                         }
                         is ConditionalJumpInstruction -> {
@@ -149,148 +149,173 @@ class NarrativeInstance(
         task: NarrativeTaskState,
         instruction: CallFunctionInstruction,
     ): FunctionDispatchRequest? {
-        val arguments = instruction.arguments.map { evaluateExpression(currentState, task, it) }
-        @Suppress("UNCHECKED_CAST")
-        val definition = functionRegistry.definition(instruction.functionId) as NarrativeFunctionDefinition<NarrativeFunctionStateSnapshot, NarrativeFunctionEffectPayload>
+        val arguments = evaluateArguments(task, instruction)
+        val definition = functionRegistry.definition(instruction.functionId)
         return when (val result = definition.startCall(arguments, DefaultNarrativeFunctionContext(currentState, task))) {
             is NarrativeFunctionResult.Returned -> {
                 currentState = currentState.updateTask(
                     index = taskIndex,
-                    task = task.copy(
-                        instructionPointer = task.instructionPointer + 1,
-                        slots = assignResult(task, instruction.resultSlot, result.value),
+                    task = applyResultTarget(
+                        task = task,
+                        resultTarget = instruction.resultTarget,
+                        value = result.value,
+                        nextInstructionPointer = task.instructionPointer + 1,
                     ),
                 )
                 null
             }
-            is NarrativeFunctionResult.Suspended -> {
-                val effectId = "${task.id}:${task.instructionPointer}"
+            NarrativeFunctionResult.Suspended -> {
                 val suspendedStatus = NarrativeTaskStatus.SuspendedCall(
-                    effectId = effectId,
-                    functionId = instruction.functionId,
-                    resultSlot = instruction.resultSlot,
+                    resultTarget = instruction.resultTarget,
                     nextInstructionPointer = task.instructionPointer + 1,
-                    payload = result.payload,
-                    continuation = result.continuation,
                 )
                 currentState = currentState.updateTask(
                     index = taskIndex,
                     task = task.copy(status = suspendedStatus),
                 )
-                FunctionDispatchRequest(task.id, effectId, instruction.functionId, suspendedStatus.payload, suspendedStatus.continuation)
+                FunctionDispatchRequest(task.id)
             }
         }
     }
 
     private suspend fun dispatchSuspendedCall(request: FunctionDispatchRequest) {
-        val context = mutex.withLock {
-            if (request.effectId in inFlightEffects) return
-            inFlightEffects += request.effectId
-            val task = currentState.tasks.first { currentTask ->
-                val status = currentTask.status
-                status is NarrativeTaskStatus.SuspendedCall && status.effectId == request.effectId
-            }
-            DefaultNarrativeFunctionContext(currentState, task)
+        val dispatchData = mutex.withLock {
+            if (request.taskId in inFlightTasks) return
+            val task = currentState.tasks.firstOrNull { currentTask ->
+                currentTask.id == request.taskId && currentTask.status is NarrativeTaskStatus.SuspendedCall
+            } ?: return
+            inFlightTasks += request.taskId
+            val instruction = resolveSuspendedCallInstruction(task)
+            val arguments = evaluateArguments(task, instruction)
+            DispatchData(
+                taskId = task.id,
+                arguments = arguments,
+                definition = functionRegistry.definition(instruction.functionId),
+                context = DefaultNarrativeFunctionContext(currentState, task),
+            )
         }
 
-        @Suppress("UNCHECKED_CAST")
-        val definition = functionRegistry
-            .definition(request.functionId) as NarrativeFunctionDefinition<NarrativeFunctionStateSnapshot, NarrativeFunctionEffectPayload>
-        definition.dispatch(
-            payload = request.payload,
-            context = context,
+        dispatchData.definition.dispatch(
+            arguments = dispatchData.arguments,
+            context = dispatchData.context,
             resume = { response ->
                 val activeJob = executionJob
                 scope.launch {
                     activeJob?.join()
-                    handleResume(request.effectId, response)
+                    handleResume(dispatchData.taskId, response)
                 }
             },
         )
     }
 
     private suspend fun handleResume(
-        effectId: String,
+        taskId: String,
         response: NarrativeFunctionResponse?,
     ) {
+        val pending: List<FunctionDispatchRequest>
         mutex.withLock {
-            inFlightEffects -= effectId
+            inFlightTasks -= taskId
             val taskIndex = currentState.tasks.indexOfFirst {
-                val status = it.status
-                status is NarrativeTaskStatus.SuspendedCall && status.effectId == effectId
+                it.id == taskId && it.status is NarrativeTaskStatus.SuspendedCall
             }
             if (taskIndex < 0 || cancelled) return
 
             val task = currentState.tasks[taskIndex]
             val status = task.status as NarrativeTaskStatus.SuspendedCall
-            @Suppress("UNCHECKED_CAST")
-            val definition = functionRegistry
-                .definition(status.functionId) as NarrativeFunctionDefinition<NarrativeFunctionStateSnapshot, NarrativeFunctionEffectPayload>
+            val instruction = resolveSuspendedCallInstruction(task)
+            val arguments = evaluateArguments(task, instruction)
+            val definition = functionRegistry.definition(instruction.functionId)
             when (val result = definition.resumeCall(
-                continuation = status.continuation,
+                arguments = arguments,
                 response = response,
                 context = DefaultNarrativeFunctionContext(currentState, task),
             )) {
                 is NarrativeFunctionResult.Returned -> {
                     currentState = currentState.updateTask(
                         index = taskIndex,
-                        task = task.copy(
-                            instructionPointer = status.nextInstructionPointer,
-                            slots = assignResult(task, status.resultSlot, result.value),
-                            status = NarrativeTaskStatus.Ready,
+                        task = applyResultTarget(
+                            task = task.copy(status = NarrativeTaskStatus.Ready),
+                            resultTarget = status.resultTarget,
+                            value = result.value,
+                            nextInstructionPointer = status.nextInstructionPointer,
                         ),
                     )
                 }
-                is NarrativeFunctionResult.Suspended -> {
+                NarrativeFunctionResult.Suspended -> {
                     currentState = currentState.updateTask(
                         index = taskIndex,
-                        task = task.copy(
-                            status = status.copy(
-                                payload = result.payload,
-                                continuation = result.continuation,
-                            ),
-                        ),
+                        task = task,
                     )
                 }
             }
 
-            val pending = collectUndispatchedSuspensionsLocked()
+            pending = collectUndispatchedSuspensionsLocked()
             if (executionJob?.isActive != true && !completion.isCompleted) {
                 executionJob = launchExecutionLocked()
             }
-            pending.forEach { request ->
-                scope.launch { dispatchSuspendedCall(request) }
-            }
+        }
+        pending.forEach { request ->
+            scope.launch { dispatchSuspendedCall(request) }
         }
     }
 
     private fun collectUndispatchedSuspensionsLocked(): List<FunctionDispatchRequest> {
         return currentState.tasks.mapNotNull { task ->
-            val status = task.status as? NarrativeTaskStatus.SuspendedCall ?: return@mapNotNull null
-            if (status.effectId in inFlightEffects) {
+            if (task.status !is NarrativeTaskStatus.SuspendedCall || task.id in inFlightTasks) {
                 null
             } else {
-                FunctionDispatchRequest(
-                    taskId = task.id,
-                    effectId = status.effectId,
-                    functionId = status.functionId,
-                    payload = status.payload,
-                    continuation = status.continuation,
-                )
+                FunctionDispatchRequest(task.id)
             }
         }
     }
 
-    private fun assignResult(
+    private fun applySetVariableInstruction(
         task: NarrativeTaskState,
-        resultSlot: Int?,
-        value: NarrativeValue,
-    ): Map<Int, NarrativeValue> {
-        return if (resultSlot != null) {
-            task.slots + (resultSlot to value)
+        instruction: SetVariableInstruction,
+    ): NarrativeTaskState {
+        val value = evaluateExpression(currentState, task, instruction.expression)
+        val nextSlots = if (instruction.expression is SlotExpression) {
+            task.slots - instruction.expression.slot
         } else {
             task.slots
         }
+        return task.copy(
+            instructionPointer = task.instructionPointer + 1,
+            localVariables = task.localVariables + (instruction.name to value),
+            slots = nextSlots,
+        )
+    }
+
+    private fun applyResultTarget(
+        task: NarrativeTaskState,
+        resultTarget: NarrativeResultTarget?,
+        value: NarrativeValue,
+        nextInstructionPointer: Int,
+    ): NarrativeTaskState {
+        return when (resultTarget) {
+            null -> task.copy(instructionPointer = nextInstructionPointer)
+            is NarrativeResultTarget.Variable -> task.copy(
+                instructionPointer = nextInstructionPointer,
+                localVariables = task.localVariables + (resultTarget.name to value),
+            )
+            is NarrativeResultTarget.Slot -> task.copy(
+                instructionPointer = nextInstructionPointer,
+                slots = task.slots + (resultTarget.slot to NarrativeSlotValue.Value(value)),
+            )
+        }
+    }
+
+    private fun resolveSuspendedCallInstruction(task: NarrativeTaskState): CallFunctionInstruction {
+        val instruction = program.instructions.getOrNull(task.instructionPointer) as? CallFunctionInstruction
+            ?: throw IllegalStateException("Task `${task.id}` is suspended at instruction ${task.instructionPointer}, but no function call exists there")
+        return instruction
+    }
+
+    private fun evaluateArguments(
+        task: NarrativeTaskState,
+        instruction: CallFunctionInstruction,
+    ): List<NarrativeValue> {
+        return instruction.arguments.map { evaluateExpression(currentState, task, it) }
     }
 
     private fun evaluateExpression(
@@ -303,8 +328,15 @@ class NarrativeInstance(
             is VariableExpression -> task.localVariables[expression.name]
                 ?: state.globals[expression.name]
                 ?: throw IllegalArgumentException("Variable `${expression.name}` is not defined")
-            is SlotExpression -> task.slots[expression.slot]
-                ?: throw IllegalArgumentException("Slot `${expression.slot}` is not defined")
+            is SlotExpression -> {
+                when (val slotValue = task.slots[expression.slot]) {
+                    null -> throw IllegalArgumentException("Slot `${expression.slot}` is not defined")
+                    is NarrativeSlotValue.Value -> slotValue.value
+                    is NarrativeSlotValue.VariableReference -> task.localVariables[slotValue.name]
+                        ?: state.globals[slotValue.name]
+                        ?: throw IllegalArgumentException("Variable `${slotValue.name}` is not defined")
+                }
+            }
             is BinaryExpression -> {
                 val left = evaluateExpression(state, task, expression.left)
                 when (expression.operator) {
@@ -350,8 +382,11 @@ class NarrativeInstance(
 
 private data class FunctionDispatchRequest(
     val taskId: String,
-    val effectId: String,
-    val functionId: String,
-    val payload: NarrativeFunctionEffectPayload,
-    val continuation: NarrativeFunctionStateSnapshot,
+)
+
+private data class DispatchData(
+    val taskId: String,
+    val arguments: List<NarrativeValue>,
+    val definition: NarrativeFunctionDefinition,
+    val context: NarrativeFunctionDispatchContext,
 )

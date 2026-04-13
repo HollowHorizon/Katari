@@ -59,6 +59,14 @@ class NarrativeCompiler {
     private fun compilePropertyDeclaration(node: PropertyDeclarationNode, instructions: MutableList<NarrativeInstruction>) {
         val initialValue = node.initialValue
             ?: throw UnsupportedOperationException("Narrative property `${node.name}` requires an initializer")
+        if (initialValue is FunctionCallNode) {
+            instructions += compileCall(
+                node = initialValue,
+                instructions = instructions,
+                resultTarget = NarrativeResultTarget.Variable(node.name),
+            )
+            return
+        }
         instructions += SetVariableInstruction(
             name = node.name,
             expression = compileExpression(initialValue, instructions),
@@ -72,6 +80,14 @@ class NarrativeCompiler {
         }
         val target = node.subject as? VariableReferenceNode
             ?: throw UnsupportedOperationException("Narrative assignment target must be a variable reference")
+        if (node.value is FunctionCallNode) {
+            instructions += compileCall(
+                node = node.value,
+                instructions = instructions,
+                resultTarget = NarrativeResultTarget.Variable(target.variableName),
+            )
+            return
+        }
         instructions += SetVariableInstruction(
             name = target.variableName,
             expression = compileExpression(node.value, instructions),
@@ -130,21 +146,21 @@ class NarrativeCompiler {
     private fun compileCall(
         node: FunctionCallNode,
         instructions: MutableList<NarrativeInstruction>,
-        resultSlot: Int? = null,
+        resultTarget: NarrativeResultTarget? = null,
     ): NarrativeInstruction {
         val arguments = node.arguments.map { compileExpression(it.value, instructions) }
         return when (val function = node.function) {
             is VariableReferenceNode -> CallFunctionInstruction(
                 functionId = function.variableName,
                 arguments = arguments,
-                resultSlot = resultSlot,
+                resultTarget = resultTarget,
                 position = node.position,
             )
             is NavigationNode -> {
                 CallFunctionInstruction(
                     functionId = function.member.name,
                     arguments = listOf(compileExpression(function.subject, instructions)) + arguments,
-                    resultSlot = resultSlot,
+                    resultTarget = resultTarget,
                     position = node.position,
                 )
             }
@@ -164,7 +180,7 @@ class NarrativeCompiler {
                 instructions += compileCall(
                     node = expression,
                     instructions = instructions,
-                    resultSlot = slot,
+                    resultTarget = NarrativeResultTarget.Slot(slot),
                 )
                 SlotExpression(slot)
             }

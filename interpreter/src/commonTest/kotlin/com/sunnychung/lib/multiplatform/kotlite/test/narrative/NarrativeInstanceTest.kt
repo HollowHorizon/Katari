@@ -1,7 +1,6 @@
 package com.sunnychung.lib.multiplatform.kotlite.test.narrative
 
 import com.sunnychung.lib.multiplatform.kotlite.narrative.CallFunctionInstruction
-import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceEffectPayload
 import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceOptionSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.EntityValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.KotliteNarrativeProgram
@@ -19,6 +18,8 @@ import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeProgram
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeStateSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeStateSnapshotCodec
+import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeResultTarget
+import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeSlotValue
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskState
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatus
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValue
@@ -26,7 +27,6 @@ import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueCodec
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueCodecRegistry
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueRestoreContext
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.SayEffectPayload
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -116,7 +116,7 @@ class NarrativeInstanceTest {
                             LiteralExpression(NarrativeValue.Text("One")),
                             LiteralExpression(NarrativeValue.Text("Two")),
                         ),
-                        resultSlot = 0,
+                        resultTarget = NarrativeResultTarget.Slot(0),
                     ),
                 )
             ),
@@ -129,7 +129,7 @@ class NarrativeInstanceTest {
         instance.join()
 
         assertEquals("1", chosen.await())
-        assertEquals(NarrativeValue.Text("1"), instance.currentState().tasks.single().slots.getValue(0))
+        assertEquals(NarrativeSlotValue.Value(NarrativeValue.Text("1")), instance.currentState().tasks.single().slots.getValue(0))
     }
 
     @Test
@@ -157,7 +157,6 @@ class NarrativeInstanceTest {
         val snapshot = instance.serializeState()
         val status = snapshot.tasks.single().status
         assertIs<com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatusSnapshot.SuspendedCall>(status)
-        assertIs<SayEffectPayload>(status.payload)
 
         pendingResume!!.invoke()
         advanceUntilIdle()
@@ -174,15 +173,10 @@ class NarrativeInstanceTest {
                     id = "main",
                     instructionPointer = 2,
                     localVariables = emptyMap(),
+                    slots = emptyMap(),
                     status = NarrativeTaskStatus.SuspendedCall(
-                        effectId = "main:1",
-                        functionId = "narrate",
-                        resultSlot = null,
+                        resultTarget = null,
                         nextInstructionPointer = 2,
-                        payload = SayEffectPayload(null, "Hello"),
-                        continuation = com.sunnychung.lib.multiplatform.kotlite.narrative.SayContinuationSnapshot(
-                            SayEffectPayload(null, "Hello")
-                        ),
                     ),
                 )
             ),
@@ -198,6 +192,25 @@ class NarrativeInstanceTest {
         )
 
         assertEquals(original, codec.restore(decoded))
+    }
+
+    @Test
+    fun cancellingInstanceDoesNotCancelExternallyProvidedScope() = runTest {
+        val instance = NarrativeInstance(
+            program = NarrativeProgram(emptyList()),
+            coroutineScope = this,
+        )
+
+        instance.cancel()
+
+        val second = NarrativeInstance(
+            program = NarrativeProgram(emptyList()),
+            coroutineScope = this,
+        )
+        second.start()
+        advanceUntilIdle()
+
+        assertEquals(NarrativeTaskStatus.Completed, second.currentState().tasks.single().status)
     }
 
     @Test
@@ -267,7 +280,7 @@ class NarrativeInstanceTest {
                     CallFunctionInstruction(
                         functionId = "promptFlag",
                         arguments = listOf(LiteralExpression(NarrativeValue.Text("Enable?"))),
-                        resultSlot = 0,
+                        resultTarget = NarrativeResultTarget.Slot(0),
                     ),
                 )
             ),
@@ -279,7 +292,7 @@ class NarrativeInstanceTest {
         advanceUntilIdle()
         instance.join()
 
-        assertEquals(NarrativeValue.Bool(true), instance.currentState().tasks.single().slots.getValue(0))
+        assertEquals(NarrativeSlotValue.Value(NarrativeValue.Bool(true)), instance.currentState().tasks.single().slots.getValue(0))
     }
 
     @Test
@@ -359,13 +372,11 @@ class NarrativeInstanceTest {
         assertEquals(listOf("Matched"), events)
         assertEquals(NarrativeValue.Text("Igor"), task.localVariables.getValue("name"))
         assertEquals(NarrativeValue.Text("Leave"), task.localVariables.getValue("action"))
-        assertEquals(2, task.slots.size)
-        assertEquals(NarrativeValue.Text("Igor"), task.slots.getValue(0))
-        assertEquals(NarrativeValue.Text("Leave"), task.slots.getValue(1))
+        assertEquals(0, task.slots.size)
     }
 }
 
-private fun builtinFunctionDefinitions(): Array<NarrativeFunctionDefinition<out com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionStateSnapshot, out com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionEffectPayload>> {
+private fun builtinFunctionDefinitions(): Array<NarrativeFunctionDefinition> {
     val host = object : NarrativeHost {
         override fun narrate(text: String, resume: () -> Unit) = resume()
         override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = resume()
@@ -402,46 +413,26 @@ class TestNpcCodec : NarrativeValueCodec<TestNpcSnapshot> {
     }
 }
 
-@Serializable
-@SerialName("prompt_flag_continuation")
-data class PromptFlagContinuation(
-    val prompt: String,
-) : com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionStateSnapshot()
-
-@Serializable
-@SerialName("prompt_flag_payload")
-data class PromptFlagPayload(
-    val prompt: String,
-) : com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionEffectPayload()
-
-object PromptFlagFunction : NarrativeFunctionDefinition<PromptFlagContinuation, PromptFlagPayload> {
+object PromptFlagFunction : NarrativeFunctionDefinition {
     override val id: String = "promptFlag"
-    override val stateSnapshotClass: KClass<PromptFlagContinuation> = PromptFlagContinuation::class
-    override val stateSnapshotSerializer = PromptFlagContinuation.serializer()
-    override val payloadClass: KClass<PromptFlagPayload> = PromptFlagPayload::class
-    override val payloadSerializer = PromptFlagPayload.serializer()
 
     override suspend fun startCall(
         arguments: List<NarrativeValue>,
         context: NarrativeFunctionContext,
-    ): NarrativeFunctionResult<PromptFlagContinuation, PromptFlagPayload> {
-        val prompt = (arguments.single() as NarrativeValue.Text).value
-        return NarrativeFunctionResult.Suspended(
-            payload = PromptFlagPayload(prompt),
-            continuation = PromptFlagContinuation(prompt),
-        )
+    ): NarrativeFunctionResult {
+        return NarrativeFunctionResult.Suspended
     }
 
     override suspend fun resumeCall(
-        continuation: PromptFlagContinuation,
+        arguments: List<NarrativeValue>,
         response: NarrativeFunctionResponse?,
         context: NarrativeFunctionContext,
-    ): NarrativeFunctionResult<PromptFlagContinuation, PromptFlagPayload> {
+    ): NarrativeFunctionResult {
         return NarrativeFunctionResult.Returned(NarrativeValue.Bool(true))
     }
 
     override fun dispatch(
-        payload: PromptFlagPayload,
+        arguments: List<NarrativeValue>,
         context: NarrativeFunctionDispatchContext,
         resume: (NarrativeFunctionResponse?) -> Unit,
     ) {
