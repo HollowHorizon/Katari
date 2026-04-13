@@ -76,7 +76,7 @@ class NarrativeCompiler {
 
     private fun compileAssignment(node: AssignmentNode, instructions: MutableList<NarrativeInstruction>) {
         require(node.operator == "=") {
-            "Narrative assignment currently supports only `=`"
+            "e${node.position}: Narrative assignment currently supports only `=`"
         }
         val target = node.subject as? VariableReferenceNode
             ?: throw UnsupportedOperationException("Narrative assignment target must be a variable reference")

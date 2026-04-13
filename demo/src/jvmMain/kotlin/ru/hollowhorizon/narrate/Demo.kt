@@ -19,54 +19,13 @@ import kotlinx.serialization.cbor.Cbor
 import kotlinx.serialization.json.Json
 import java.io.File
 
-private const val SCRIPT = """
-    "Темная комната. Слышны шаги."
-    npc.say("Наконец-то ты пришёл.")
-    
-    var name = readLine()
-    var mood = "neutral"
-    
-    if (name == "Игорь") {
-        npc.say("Привет, Игорь!")
-        mood = "friendly"
-    } else {
-        npc.say("Привет, незнакомец.")
-        mood = "suspicious"
-    }
-    
-    "НПС внимательно смотрит на тебя."
-    
-    val action = choose(
-        "Спросить кто он такой",
-        "Промолчать",
-        "Уйти"
-    )
-    
-    if (action == "Спросить кто он такой") {
-        npc.say("Я тот, кто наблюдал за тобой.")
-        
-        if (mood == "friendly") {
-            npc.say("И, возможно, даже помогал тебе.")
-        } else {
-            npc.say("Но пока не уверен, можно ли тебе доверять.")
-        }
-    } else if (action == "Промолчать") {
-        "Ты ничего не отвечаешь."
-        npc.say("Молчание тоже бывает ответом.")
-    } else {
-        "Ты разворачиваешься к выходу."
-        npc.say("Мы ещё встретимся.")
-    }
-    
-    "Сцена завершена."
-"""
 
 fun main() = runBlocking {
     val host = SwingNarrativeHost()
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val program = KotliteNarrativeProgram(
         filename = "<Narrative>",
-        code = SCRIPT.trimIndent(),
+        code = SwingNarrativeHost::class.java.getResource("/script.ktlite")!!.readText(),
     )
     val functionRegistry = NarrativeBuiltinFunctions.registry(host)
     val snapshotCodec = NarrativeStateSnapshotCodec(functionRegistry = functionRegistry)
