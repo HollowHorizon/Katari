@@ -54,6 +54,11 @@ data class EndInstruction(
     override val position: SourcePosition? = null,
 ) : NarrativeInstruction
 
+data class RemoveVariablesInstruction(
+    val names: List<String>,
+    override val position: SourcePosition? = null,
+) : NarrativeInstruction
+
 data class ChoiceOption(
     val id: String,
     val text: NarrativeExpression,
@@ -137,6 +142,9 @@ sealed interface NarrativeTaskStatus {
         val resultTarget: NarrativeResultTarget?,
         val nextInstructionPointer: Int,
     ) : NarrativeTaskStatus
+    data class Failed(
+        val message: String,
+    ) : NarrativeTaskStatus
     data object Completed : NarrativeTaskStatus
 }
 
@@ -173,6 +181,11 @@ sealed interface NarrativeTaskStatusSnapshot {
     data class SuspendedCall(
         val resultTarget: NarrativeResultTargetSnapshot?,
         val nextInstructionPointer: Int,
+    ) : NarrativeTaskStatusSnapshot
+
+    @Serializable
+    data class Failed(
+        val message: String,
     ) : NarrativeTaskStatusSnapshot
 
     @Serializable

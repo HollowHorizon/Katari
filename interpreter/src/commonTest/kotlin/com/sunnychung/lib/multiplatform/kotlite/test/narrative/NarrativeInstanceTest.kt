@@ -14,6 +14,7 @@ import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionRespo
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionResult
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeHost
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeInstance
+import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeNoOpHost
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeProgram
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeStateSnapshot
@@ -669,6 +670,137 @@ class NarrativeInstanceTest {
         assertEquals(NarrativeValue.Text("Leave"), task.localVariables.getValue("action"))
         assertEquals(0, task.slots.size)
         kotlin.test.assertTrue(task.localVariables.keys.none { it.startsWith("__narrative_slot_") })
+    }
+
+    @Test
+    fun runtimeMarksTaskAsFailedAndJoinCompletesOnExecutionError() = runTest {
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    unknownFunction()
+                    "never"
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val status = instance.currentState().tasks.single().status
+        val failed = assertIs<NarrativeTaskStatus.Failed>(status)
+        assertTrue(failed.message.contains("No narrative function is registered for id `unknownFunction`"))
+    }
+
+    @Test
+    fun topLevelUserFunctionsCanBeCalledFromNarrativeScript() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    fun greet() {
+                        "Hello"
+                    }
+
+                    greet()
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(listOf("Hello"), events)
+        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+    }
+
+    @Test
+    fun userFunctionsSupportParametersAndReturnValues() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    fun add(a: Int, b: Int): Int {
+                        a + b
+                    }
+
+                    val sum = add(2, 3)
+                    "sum=${'$'}sum"
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val task = instance.currentState().tasks.single()
+        assertEquals(listOf("sum=5"), events)
+        assertEquals(NarrativeValue.Int32(5), task.localVariables.getValue("sum"))
+        assertTrue(task.localVariables.keys.none { it.startsWith("__narrative_fn_") })
+    }
+
+    @Test
+    fun chooseTemporaryVariablesAreCleanedAfterBranchExecution() = runTest {
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) = resume()
+            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
+                resume(options.first { it.enabled }.id)
+            }
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    var money = 0
+                    choose {
+                        "Обычный" -> {
+                            money += 2
+                        }
+                        "Заблокированный" disableIf money < 10 -> {}
+                    }
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val task = instance.currentState().tasks.single()
+        assertTrue(task.localVariables.keys.none { it.startsWith("__narrative_choose_") })
     }
 
     @Test

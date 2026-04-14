@@ -7,6 +7,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.BreakNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BooleanNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ContinueNode
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IfNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IntegerNode
@@ -18,6 +19,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
 import com.sunnychung.lib.multiplatform.kotlite.model.PropertyDeclarationNode
+import com.sunnychung.lib.multiplatform.kotlite.model.ReturnNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringFieldIdentifierNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
@@ -32,14 +34,23 @@ class NarrativeCompiler {
     private val loopContexts = ArrayDeque<LoopContext>()
     private val checkpoints = mutableMapOf<String, Int>()
     private val unresolvedJumps = mutableListOf<UnresolvedJump>()
+    private val userFunctions = mutableMapOf<String, FunctionDeclarationNode>()
+    private val userFunctionCompilationStack = ArrayDeque<String>()
+    private val variableAliasScopes = ArrayDeque<Map<String, String>>()
 
     fun compile(script: ScriptNode): NarrativeProgram {
         temporarySlotCounter = 0
         loopContexts.clear()
         checkpoints.clear()
         unresolvedJumps.clear()
+        userFunctions.clear()
+        userFunctionCompilationStack.clear()
+        variableAliasScopes.clear()
+
+        collectTopLevelUserFunctions(script)
+
         val instructions = mutableListOf<NarrativeInstruction>()
-        compileStatements(script.nodes, instructions)
+        compileStatements(script.nodes.filterNot { it is FunctionDeclarationNode }, instructions)
         resolveCheckpointJumps(instructions)
         instructions += EndInstruction(position = script.position)
         return NarrativeProgram(instructions = instructions)
@@ -62,6 +73,9 @@ class NarrativeCompiler {
             is NarrativeCheckpointNode -> compileCheckpoint(statement, instructions)
             is NarrativeJumpNode -> compileJump(statement, instructions)
             is NarrativeChooseNode -> compileChoose(statement, instructions)
+            is FunctionDeclarationNode -> throw UnsupportedOperationException(
+                "${statement.position} Local narrative function declarations are not supported. Declare functions at top-level only."
+            )
             is UnaryOpNode -> compileUnaryStatement(statement, instructions)
             is StringLiteralNode -> instructions += CallFunctionInstruction(
                 functionId = "narrate",
@@ -73,8 +87,64 @@ class NarrativeCompiler {
                 arguments = listOf(compileStringExpression(statement, instructions)),
                 position = statement.position,
             )
-            is FunctionCallNode -> instructions += compileCall(statement, instructions)
+            is FunctionCallNode -> {
+                if (!compileUserFunctionCall(statement, instructions)) {
+                    instructions += compileCall(statement, instructions)
+                }
+            }
             else -> throw UnsupportedOperationException("${statement.position} Narrative compiler does not support `${statement::class.simpleName}` yet")
+        }
+    }
+
+    private fun collectTopLevelUserFunctions(script: ScriptNode) {
+        script.nodes.filterIsInstance<FunctionDeclarationNode>().forEach { function ->
+            validateUserFunctionDeclaration(function)
+            require(function.name !in userFunctions) {
+                "${function.position} Narrative function `${function.name}` is declared more than once"
+            }
+            userFunctions[function.name] = function
+        }
+    }
+
+    private fun validateUserFunctionDeclaration(function: FunctionDeclarationNode) {
+        require(function.receiver == null) {
+            "${function.position} Narrative user function `${function.name}` cannot have a receiver"
+        }
+        require(function.typeParameters.isEmpty() && function.extraTypeParameters.isEmpty()) {
+            "${function.position} Narrative user function `${function.name}` cannot declare type parameters"
+        }
+        require(function.body != null) {
+            "${function.position} Narrative user function `${function.name}` must have a body"
+        }
+        validateUserFunctionReturns(function)
+    }
+
+    private fun validateUserFunctionReturns(function: FunctionDeclarationNode) {
+        val body = function.body ?: return
+        if (body.statements.isEmpty()) {
+            return
+        }
+        val returnPositions = mutableListOf<ReturnNode>()
+        collectReturnNodes(body, returnPositions)
+        if (returnPositions.isEmpty()) {
+            return
+        }
+        val lastStatement = body.statements.last()
+        require(returnPositions.size == 1 && lastStatement is ReturnNode) {
+            "${function.position} Narrative user function `${function.name}` can only use a single trailing return statement"
+        }
+    }
+
+    private fun collectReturnNodes(node: ASTNode, output: MutableList<ReturnNode>) {
+        when (node) {
+            is ReturnNode -> output += node
+            is BlockNode -> node.statements.forEach { collectReturnNodes(it, output) }
+            is IfNode -> {
+                node.trueBlock?.let { collectReturnNodes(it, output) }
+                node.falseBlock?.let { collectReturnNodes(it, output) }
+            }
+            is WhileNode -> node.body?.let { collectReturnNodes(it, output) }
+            else -> Unit
         }
     }
 
@@ -102,22 +172,17 @@ class NarrativeCompiler {
     ) {
         require(node.entries.isNotEmpty()) { "Narrative choose block cannot be empty" }
         val choiceVariable = "__narrative_choose_${nextTemporarySlot()}"
-        val compiledEntries = node.entries.map { entry ->
-            val textVariable = "__narrative_choose_text_${nextTemporarySlot()}"
-            instructions += SetVariableInstruction(
-                name = textVariable,
-                expression = compileExpression(entry.text, instructions),
-                position = entry.position,
-            )
-            val textExpression = VariableExpression(textVariable)
+        val compiledEntries = node.entries.mapIndexed { index, entry ->
+            val indexText = index.toString()
+            val optionTextExpression = compileExpression(entry.text, instructions)
             CompiledChooseEntry(
                 entry = entry,
-                argumentExpression = compileChooseEntryArgument(entry, textExpression, instructions),
-                selectedIdExpression = textExpression,
+                argumentExpression = compileChooseEntryArgument(entry, optionTextExpression, instructions),
+                selectedIdExpression = LiteralExpression(NarrativeValue.Text(indexText)),
             )
         }
         instructions += CallFunctionInstruction(
-            functionId = "choose",
+            functionId = "chooseIndexed",
             arguments = compiledEntries.map { it.argumentExpression },
             resultTarget = NarrativeResultTarget.Variable(choiceVariable),
             position = node.position,
@@ -150,6 +215,10 @@ class NarrativeCompiler {
             )
         }
         val endTarget = instructions.size
+        instructions += RemoveVariablesInstruction(
+            names = listOf(choiceVariable),
+            position = node.position,
+        )
         endJumpIndices.forEach { jumpIndex ->
             instructions[jumpIndex] = JumpInstruction(
                 target = endTarget,
@@ -206,15 +275,27 @@ class NarrativeCompiler {
         val initialValue = node.initialValue
             ?: throw UnsupportedOperationException("Narrative property `${node.name}` requires an initializer")
         if (initialValue is FunctionCallNode) {
-            instructions += compileCall(
-                node = initialValue,
-                instructions = instructions,
-                resultTarget = NarrativeResultTarget.Variable(node.name),
-            )
+            val declaration = (initialValue.function as? VariableReferenceNode)
+                ?.variableName
+                ?.let { userFunctions[it] }
+            if (declaration != null) {
+                compileUserFunctionInvocation(
+                    declaration = declaration,
+                    callNode = initialValue,
+                    instructions = instructions,
+                    resultTarget = NarrativeResultTarget.Variable(resolveVariableName(node.name)),
+                )
+            } else {
+                instructions += compileCall(
+                    node = initialValue,
+                    instructions = instructions,
+                    resultTarget = NarrativeResultTarget.Variable(resolveVariableName(node.name)),
+                )
+            }
             return
         }
         instructions += SetVariableInstruction(
-            name = node.name,
+            name = resolveVariableName(node.name),
             expression = compileExpression(initialValue, instructions),
             position = node.position,
         )
@@ -223,18 +304,31 @@ class NarrativeCompiler {
     private fun compileAssignment(node: AssignmentNode, instructions: MutableList<NarrativeInstruction>) {
         val target = node.subject as? VariableReferenceNode
             ?: throw UnsupportedOperationException("Narrative assignment target must be a variable reference")
+        val targetName = resolveVariableName(target.variableName)
         when (node.operator) {
             "=" -> {
                 if (node.value is FunctionCallNode) {
-                    instructions += compileCall(
-                        node = node.value,
-                        instructions = instructions,
-                        resultTarget = NarrativeResultTarget.Variable(target.variableName),
-                    )
+                    val declaration = (node.value.function as? VariableReferenceNode)
+                        ?.variableName
+                        ?.let { userFunctions[it] }
+                    if (declaration != null) {
+                        compileUserFunctionInvocation(
+                            declaration = declaration,
+                            callNode = node.value,
+                            instructions = instructions,
+                            resultTarget = NarrativeResultTarget.Variable(targetName),
+                        )
+                    } else {
+                        instructions += compileCall(
+                            node = node.value,
+                            instructions = instructions,
+                            resultTarget = NarrativeResultTarget.Variable(targetName),
+                        )
+                    }
                     return
                 }
                 instructions += SetVariableInstruction(
-                    name = target.variableName,
+                    name = targetName,
                     expression = compileExpression(node.value, instructions),
                     position = node.position,
                 )
@@ -242,9 +336,9 @@ class NarrativeCompiler {
             "+=", "-=" -> {
                 val operator = if (node.operator == "+=") NarrativeBinaryOperator.Add else NarrativeBinaryOperator.Subtract
                 instructions += SetVariableInstruction(
-                    name = target.variableName,
+                    name = targetName,
                     expression = BinaryExpression(
-                        left = VariableExpression(target.variableName),
+                        left = VariableExpression(targetName),
                         operator = operator,
                         right = compileExpression(node.value, instructions),
                     ),
@@ -300,11 +394,23 @@ class NarrativeCompiler {
         instructions: MutableList<NarrativeInstruction>,
     ) {
         if (expression is FunctionCallNode) {
-            instructions += compileCall(
-                node = expression,
-                instructions = instructions,
-                resultTarget = target,
-            )
+            val declaration = (expression.function as? VariableReferenceNode)
+                ?.variableName
+                ?.let { userFunctions[it] }
+            if (declaration != null) {
+                compileUserFunctionInvocation(
+                    declaration = declaration,
+                    callNode = expression,
+                    instructions = instructions,
+                    resultTarget = target,
+                )
+            } else {
+                instructions += compileCall(
+                    node = expression,
+                    instructions = instructions,
+                    resultTarget = target,
+                )
+            }
             return
         }
         instructions += SetResultInstruction(
@@ -418,6 +524,150 @@ class NarrativeCompiler {
         }
     }
 
+    private fun compileUserFunctionInvocation(
+        declaration: FunctionDeclarationNode,
+        callNode: FunctionCallNode,
+        instructions: MutableList<NarrativeInstruction>,
+        resultTarget: NarrativeResultTarget?,
+    ) {
+        val functionName = declaration.name
+        require(functionName !in userFunctionCompilationStack) {
+            "${callNode.position} Recursive narrative user function calls are not supported (`${functionName}`)"
+        }
+        require(callNode.arguments.size == declaration.valueParameters.size) {
+            "${callNode.position} Narrative user function `${functionName}` expects ${declaration.valueParameters.size} arguments but got ${callNode.arguments.size}"
+        }
+
+        val body = declaration.body
+            ?: throw UnsupportedOperationException("${declaration.position} Narrative user function `${functionName}` must have a body")
+
+        val parameterNames = declaration.valueParameters.map { it.name }
+        val argumentExpressions = callNode.arguments.map { compileExpression(it.value, instructions) }
+        val localNames = collectDeclaredVariables(body.statements)
+        val aliasMap = mutableMapOf<String, String>()
+
+        parameterNames.forEachIndexed { index, parameterName ->
+            aliasMap[parameterName] = "__narrative_fn_${functionName}_${nextTemporarySlot()}_arg_${index}"
+        }
+        localNames.forEach { localName ->
+            aliasMap.putIfAbsent(localName, "__narrative_fn_${functionName}_${nextTemporarySlot()}_local_${localName}")
+        }
+
+        parameterNames.forEachIndexed { index, parameterName ->
+            val alias = aliasMap.getValue(parameterName)
+            instructions += SetVariableInstruction(
+                name = alias,
+                expression = argumentExpressions[index],
+                position = callNode.position,
+            )
+        }
+
+        variableAliasScopes.addLast(aliasMap)
+        userFunctionCompilationStack.addLast(functionName)
+        try {
+            if (resultTarget == null) {
+                compileUserFunctionBodyAsStatements(body, instructions, functionName)
+            } else {
+                compileUserFunctionBodyAsExpression(body, instructions, resultTarget, functionName)
+            }
+        } finally {
+            userFunctionCompilationStack.removeLast()
+            variableAliasScopes.removeLast()
+            instructions += RemoveVariablesInstruction(
+                names = aliasMap.values.toList(),
+                position = callNode.position,
+            )
+        }
+    }
+
+    private fun compileUserFunctionBodyAsStatements(
+        body: BlockNode,
+        instructions: MutableList<NarrativeInstruction>,
+        functionName: String,
+    ) {
+        val statements = body.statements
+        if (statements.isEmpty()) return
+        statements.forEachIndexed { index, statement ->
+            if (statement is ReturnNode) {
+                require(index == statements.lastIndex) {
+                    "${statement.position} Narrative user function `${functionName}` only supports trailing return"
+                }
+                return
+            }
+            compileStatement(statement, instructions)
+        }
+    }
+
+    private fun compileUserFunctionBodyAsExpression(
+        body: BlockNode,
+        instructions: MutableList<NarrativeInstruction>,
+        resultTarget: NarrativeResultTarget,
+        functionName: String,
+    ) {
+        val statements = body.statements
+        require(statements.isNotEmpty()) {
+            "${body.position} Narrative user function `${functionName}` must have a non-empty body to return a value"
+        }
+
+        statements.dropLast(1).forEach { statement ->
+            require(statement !is ReturnNode) {
+                "${statement.position} Narrative user function `${functionName}` only supports trailing return"
+            }
+            compileStatement(statement, instructions)
+        }
+
+        val last = statements.last()
+        when (last) {
+            is ReturnNode -> {
+                val returnValue = last.value ?: NullNode
+                compileExpressionIntoTarget(returnValue, resultTarget, instructions)
+            }
+            else -> compileExpressionIntoTarget(last, resultTarget, instructions)
+        }
+    }
+
+    private fun collectDeclaredVariables(statements: List<ASTNode>): Set<String> {
+        val names = linkedSetOf<String>()
+        statements.forEach { statement ->
+            when (statement) {
+                is PropertyDeclarationNode -> names += statement.name
+                is BlockNode -> names += collectDeclaredVariables(statement.statements)
+                is IfNode -> {
+                    statement.trueBlock?.let { names += collectDeclaredVariables(it.statements) }
+                    statement.falseBlock?.let { names += collectDeclaredVariables(it.statements) }
+                }
+                is WhileNode -> statement.body?.let { names += collectDeclaredVariables(it.statements) }
+                else -> Unit
+            }
+        }
+        return names
+    }
+
+    private fun resolveVariableName(name: String): String {
+        variableAliasScopes.toList().asReversed().forEach { scope ->
+            val alias = scope[name]
+            if (alias != null) {
+                return alias
+            }
+        }
+        return name
+    }
+
+    private fun compileUserFunctionCall(
+        node: FunctionCallNode,
+        instructions: MutableList<NarrativeInstruction>,
+    ): Boolean {
+        val functionName = (node.function as? VariableReferenceNode)?.variableName ?: return false
+        val declaration = userFunctions[functionName] ?: return false
+        compileUserFunctionInvocation(
+            declaration = declaration,
+            callNode = node,
+            instructions = instructions,
+            resultTarget = null,
+        )
+        return true
+    }
+
     private fun compileExpression(expression: ASTNode, instructions: MutableList<NarrativeInstruction>): NarrativeExpression {
         return when (expression) {
             is BooleanNode -> LiteralExpression(NarrativeValue.Bool(expression.value))
@@ -425,10 +675,24 @@ class NarrativeCompiler {
             NullNode -> LiteralExpression(NarrativeValue.Null)
             is StringLiteralNode -> LiteralExpression(NarrativeValue.Text(expression.content))
             is StringNode -> compileStringExpression(expression, instructions)
-            is StringFieldIdentifierNode -> VariableExpression(expression.variableName)
-            is VariableReferenceNode -> VariableExpression(expression.variableName)
+            is StringFieldIdentifierNode -> VariableExpression(resolveVariableName(expression.variableName))
+            is VariableReferenceNode -> VariableExpression(resolveVariableName(expression.variableName))
             is IfNode -> compileIfExpression(expression, instructions)
             is FunctionCallNode -> {
+                val functionName = (expression.function as? VariableReferenceNode)?.variableName
+                if (functionName != null) {
+                    val declaration = userFunctions[functionName]
+                    if (declaration != null) {
+                        val slot = nextTemporarySlot()
+                        compileUserFunctionInvocation(
+                            declaration = declaration,
+                            callNode = expression,
+                            instructions = instructions,
+                            resultTarget = NarrativeResultTarget.Slot(slot),
+                        )
+                        return SlotExpression(slot)
+                    }
+                }
                 val slot = nextTemporarySlot()
                 instructions += compileCall(
                     node = expression,
@@ -526,7 +790,7 @@ class NarrativeCompiler {
     ): NarrativeExpression {
         val operand = node.node
             ?: throw UnsupportedOperationException("Unary operator `${node.operator}` requires an operand")
-        val variableName = (operand as? VariableReferenceNode)?.variableName
+        val variableName = (operand as? VariableReferenceNode)?.variableName?.let { resolveVariableName(it) }
             ?: throw UnsupportedOperationException(
                 "Unary operator `${node.operator}` requires a variable reference operand"
             )

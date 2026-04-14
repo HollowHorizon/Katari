@@ -2,6 +2,7 @@ package com.sunnychung.lib.multiplatform.kotlite.narrative
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -95,7 +96,7 @@ class NarrativeInstance(
                 val taskIndex = currentState.tasks.indexOfFirst { it.status == NarrativeTaskStatus.Ready }
                 if (taskIndex < 0) {
                     pendingSuspensions = collectUndispatchedSuspensionsLocked()
-                    if (currentState.tasks.all { it.status == NarrativeTaskStatus.Completed } && !completion.isCompleted) {
+                    if (currentState.tasks.all { isTaskFinal(it.status) } && !completion.isCompleted) {
                         completion.complete(Unit)
                     }
                     shouldReturn = true
@@ -106,55 +107,79 @@ class NarrativeInstance(
                 if (task.instructionPointer >= program.instructions.size) {
                     currentState = currentState.completeTask(taskIndex)
                 } else {
-                    when (val instruction = program.instructions[task.instructionPointer]) {
-                        is CallFunctionInstruction -> nextEffectToDispatch = executeFunctionCallLocked(taskIndex, task, instruction)
-                        is SetVariableInstruction -> {
-                            val referencedSlots = collectReferencedSlots(instruction.expression)
-                            currentState = currentState.updateTask(
-                                index = taskIndex,
-                                task = cleanupSlots(
-                                    task = applySetVariableInstruction(task, instruction),
-                                    slotsToRemove = referencedSlots,
-                                ),
-                            )
-                        }
-                        is SetResultInstruction -> {
-                            val referencedSlots = collectReferencedSlots(instruction.expression)
-                            currentState = currentState.updateTask(
-                                index = taskIndex,
-                                task = cleanupSlots(
-                                    task = applyExpressionResultTarget(
-                                        task = task,
-                                        resultTarget = instruction.target,
-                                        expression = instruction.expression,
-                                        nextInstructionPointer = task.instructionPointer + 1,
+                    val instruction = program.instructions[task.instructionPointer]
+                    try {
+                        when (instruction) {
+                            is CallFunctionInstruction -> nextEffectToDispatch = executeFunctionCallLocked(taskIndex, task, instruction)
+                            is SetVariableInstruction -> {
+                                val referencedSlots = collectReferencedSlots(instruction.expression)
+                                currentState = currentState.updateTask(
+                                    index = taskIndex,
+                                    task = cleanupSlots(
+                                        task = applySetVariableInstruction(task, instruction),
+                                        slotsToRemove = referencedSlots,
                                     ),
-                                    slotsToRemove = referencedSlots,
-                                ),
-                            )
-                        }
-                        is ConditionalJumpInstruction -> {
-                            val referencedSlots = collectReferencedSlots(instruction.condition)
-                            val isTrue = evaluateExpression(currentState, task, instruction.condition).asBoolean()
-                            currentState = currentState.updateTask(
-                                index = taskIndex,
-                                task = cleanupSlots(
+                                )
+                            }
+                            is SetResultInstruction -> {
+                                val referencedSlots = collectReferencedSlots(instruction.expression)
+                                currentState = currentState.updateTask(
+                                    index = taskIndex,
+                                    task = cleanupSlots(
+                                        task = applyExpressionResultTarget(
+                                            task = task,
+                                            resultTarget = instruction.target,
+                                            expression = instruction.expression,
+                                            nextInstructionPointer = task.instructionPointer + 1,
+                                        ),
+                                        slotsToRemove = referencedSlots,
+                                    ),
+                                )
+                            }
+                            is ConditionalJumpInstruction -> {
+                                val referencedSlots = collectReferencedSlots(instruction.condition)
+                                val isTrue = evaluateExpression(currentState, task, instruction.condition).asBoolean()
+                                currentState = currentState.updateTask(
+                                    index = taskIndex,
+                                    task = cleanupSlots(
+                                        task = task.copy(
+                                            instructionPointer = if (isTrue) task.instructionPointer + 1 else instruction.falseTarget,
+                                        ),
+                                        slotsToRemove = referencedSlots,
+                                    ),
+                                )
+                            }
+                            is JumpInstruction -> {
+                                currentState = currentState.updateTask(
+                                    index = taskIndex,
+                                    task = task.copy(instructionPointer = instruction.target),
+                                )
+                            }
+                            is EndInstruction -> {
+                                currentState = currentState.completeTask(taskIndex)
+                            }
+                            is RemoveVariablesInstruction -> {
+                                currentState = currentState.updateTask(
+                                    index = taskIndex,
                                     task = task.copy(
-                                        instructionPointer = if (isTrue) task.instructionPointer + 1 else instruction.falseTarget,
+                                        instructionPointer = task.instructionPointer + 1,
+                                        localVariables = task.localVariables - instruction.names.toSet(),
+                                        slots = task.slots.filterValues { slotValue ->
+                                            (slotValue as? NarrativeSlotValue.VariableReference)?.name !in instruction.names
+                                        },
                                     ),
-                                    slotsToRemove = referencedSlots,
-                                ),
-                            )
+                                )
+                            }
                         }
-                        is JumpInstruction -> {
-                            currentState = currentState.updateTask(
-                                index = taskIndex,
-                                task = task.copy(instructionPointer = instruction.target),
-                            )
+                    } catch (e: Throwable) {
+                        if (e is CancellationException) {
+                            throw e
                         }
-                        is EndInstruction -> {
-                            currentState = currentState.completeTask(taskIndex)
-                        }
+                        val message = buildRuntimeErrorMessage(instruction.position, e)
+                        currentState = currentState.updateTask(
+                            index = taskIndex,
+                            task = task.copy(status = NarrativeTaskStatus.Failed(message = message)),
+                        )
                     }
                 }
             }
@@ -225,17 +250,27 @@ class NarrativeInstance(
             )
         }
 
-        dispatchData.definition.dispatch(
-            arguments = dispatchData.arguments,
-            context = dispatchData.context,
-            resume = { response ->
-                val activeJob = executionJob
-                scope.launch {
-                    activeJob?.join()
-                    handleResume(dispatchData.taskId, response)
-                }
-            },
-        )
+        try {
+            dispatchData.definition.dispatch(
+                arguments = dispatchData.arguments,
+                context = dispatchData.context,
+                resume = { response ->
+                    val activeJob = executionJob
+                    scope.launch {
+                        activeJob?.join()
+                        handleResume(dispatchData.taskId, response)
+                    }
+                },
+            )
+        } catch (e: Throwable) {
+            if (e is CancellationException) {
+                throw e
+            }
+            markTaskAsFailed(
+                taskId = dispatchData.taskId,
+                message = buildRuntimeErrorMessage(null, e),
+            )
+        }
     }
 
     private suspend fun handleResume(
@@ -256,37 +291,50 @@ class NarrativeInstance(
             val arguments = evaluateArguments(task, instruction)
             val referencedSlots = collectReferencedSlots(instruction.arguments)
             val definition = functionRegistry.definition(instruction.functionId)
-            when (val result = definition.resumeCall(
-                arguments = arguments,
-                response = response,
-                context = DefaultNarrativeFunctionContext(currentState, task),
-            )) {
-                is NarrativeFunctionResult.Returned -> {
-                    currentState = currentState.updateTask(
-                        index = taskIndex,
-                        task = cleanupSlots(
-                            task = applyResultTarget(
-                                task = task.copy(status = NarrativeTaskStatus.Ready),
-                                resultTarget = status.resultTarget,
-                                value = result.value,
-                                nextInstructionPointer = status.nextInstructionPointer,
+            try {
+                when (val result = definition.resumeCall(
+                    arguments = arguments,
+                    response = response,
+                    context = DefaultNarrativeFunctionContext(currentState, task),
+                )) {
+                    is NarrativeFunctionResult.Returned -> {
+                        currentState = currentState.updateTask(
+                            index = taskIndex,
+                            task = cleanupSlots(
+                                task = applyResultTarget(
+                                    task = task.copy(status = NarrativeTaskStatus.Ready),
+                                    resultTarget = status.resultTarget,
+                                    value = result.value,
+                                    nextInstructionPointer = status.nextInstructionPointer,
+                                ),
+                                slotsToRemove = referencedSlots,
                             ),
-                            slotsToRemove = referencedSlots,
-                        ),
-                    )
+                        )
+                    }
+                    NarrativeFunctionResult.Suspended -> {
+                        currentState = currentState.updateTask(
+                            index = taskIndex,
+                            task = task,
+                        )
+                    }
                 }
-                NarrativeFunctionResult.Suspended -> {
-                    currentState = currentState.updateTask(
-                        index = taskIndex,
-                        task = task,
-                    )
+            } catch (e: Throwable) {
+                if (e is CancellationException) {
+                    throw e
                 }
+                currentState = currentState.updateTask(
+                    index = taskIndex,
+                    task = task.copy(status = NarrativeTaskStatus.Failed(message = buildRuntimeErrorMessage(null, e))),
+                )
             }
 
             pending = collectUndispatchedSuspensionsLocked()
-            if (executionJob?.isActive != true && !completion.isCompleted) {
+            if (currentState.tasks.all { isTaskFinal(it.status) } && !completion.isCompleted) {
+                completion.complete(Unit)
+            } else if (executionJob?.isActive != true && !completion.isCompleted) {
                 executionJob = launchExecutionLocked()
             }
+            Unit
         }
         pending.forEach { request ->
             scope.launch { dispatchSuspendedCall(request) }
@@ -508,6 +556,31 @@ class NarrativeInstance(
 
     private fun NarrativeState.completeTask(index: Int): NarrativeState {
         return updateTask(index, tasks[index].copy(status = NarrativeTaskStatus.Completed))
+    }
+
+    private fun isTaskFinal(status: NarrativeTaskStatus): Boolean {
+        return status == NarrativeTaskStatus.Completed || status is NarrativeTaskStatus.Failed
+    }
+
+    private fun buildRuntimeErrorMessage(position: Any?, error: Throwable): String {
+        val base = error.message ?: error::class.simpleName ?: "Unknown narrative runtime error"
+        return if (position != null) "[$position] $base" else base
+    }
+
+    private suspend fun markTaskAsFailed(taskId: String, message: String) {
+        mutex.withLock {
+            val taskIndex = currentState.tasks.indexOfFirst { it.id == taskId }
+            if (taskIndex < 0) return
+            val task = currentState.tasks[taskIndex]
+            currentState = currentState.updateTask(
+                index = taskIndex,
+                task = task.copy(status = NarrativeTaskStatus.Failed(message = message)),
+            )
+            if (currentState.tasks.all { isTaskFinal(it.status) } && !completion.isCompleted) {
+                completion.complete(Unit)
+            }
+            Unit
+        }
     }
 
     private fun NarrativeValue.asBoolean(): Boolean {

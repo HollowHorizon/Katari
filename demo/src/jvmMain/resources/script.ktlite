@@ -1,17 +1,32 @@
 "Пришло время делать выбор"
 
+fun expr() {
+    "Ну и что это"
+    "Небольшое сокращение?"
+    "Ну допустим, $name"
+    jump выбор
+}
+
+fun lowercase(name: String) = name.lowercase()
+
+
+"Как тебя зовут?"
+
+var name = readLine("Имя")
+
 var money = 0
 
 checkpoint выбор
 
 choose {
-    "Обычный" -> {
+    lowercase("Обычный") -> {
         "Ну, выбор, как выбор"
         money += 2
         jump выбор
     }
     "Заблокированный" disableIf money < 10 -> {
         "Вау, ты прошёл заблокированный выбор!"
+        expr()
     }
 
     "Вложенный" -> {

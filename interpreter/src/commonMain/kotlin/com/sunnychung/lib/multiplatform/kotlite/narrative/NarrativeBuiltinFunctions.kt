@@ -25,6 +25,7 @@ object NarrativeBuiltinFunctions {
                 SayFunction(host),
                 ChoiceFunction(host),
                 ChooseFunction(host),
+                ChooseIndexedFunction(host),
                 ChooseExhaustibleFunction(host),
                 ChoiceOptionFunction,
                 ReadLineFunction(host),
@@ -152,6 +153,42 @@ object NarrativeBuiltinFunctions {
                 "Unknown choice `${selection.optionId}`"
             }
             return NarrativeFunctionResult.Returned(NarrativeValue.Text(selection.optionId))
+        }
+
+        override fun dispatch(
+            arguments: List<NarrativeValue>,
+            context: NarrativeFunctionDispatchContext,
+            resume: (NarrativeFunctionResponse?) -> Unit,
+        ) {
+            host.choose(arguments.toChoiceOptions(useTextAsId = true, includeDisabled = true)) { optionId ->
+                resume(NarrativeFunctionResponse.ChoiceSelection(optionId))
+            }
+        }
+    }
+
+    private class ChooseIndexedFunction(private val host: NarrativeHost) : NarrativeFunctionDefinition {
+        override val id: String = "chooseIndexed"
+
+        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
+            require(arguments.isNotEmpty()) { "`chooseIndexed` expects at least one option" }
+            return NarrativeFunctionResult.Suspended
+        }
+
+        override suspend fun resumeCall(
+            arguments: List<NarrativeValue>,
+            response: NarrativeFunctionResponse?,
+            context: NarrativeFunctionContext,
+        ): NarrativeFunctionResult {
+            val selection = response as? NarrativeFunctionResponse.ChoiceSelection
+                ?: throw IllegalArgumentException("`chooseIndexed` expects a choice selection response")
+            val options = arguments.toChoiceOptionsWithSourceIndex(useTextAsId = true, includeDisabled = true)
+            val selected = options.firstOrNull { indexed ->
+                indexed.option.enabled && indexed.option.id == selection.optionId
+            }
+            require(selected != null) {
+                "Unknown choice `${selection.optionId}`"
+            }
+            return NarrativeFunctionResult.Returned(NarrativeValue.Text(selected.sourceIndex.toString()))
         }
 
         override fun dispatch(
@@ -347,6 +384,16 @@ private fun List<NarrativeValue>.toChoiceOptions(
     useTextAsId: Boolean,
     includeDisabled: Boolean,
 ): List<ChoiceOptionSnapshot> {
+    return toChoiceOptionsWithSourceIndex(
+        useTextAsId = useTextAsId,
+        includeDisabled = includeDisabled,
+    ).map { it.option }
+}
+
+private fun List<NarrativeValue>.toChoiceOptionsWithSourceIndex(
+    useTextAsId: Boolean,
+    includeDisabled: Boolean,
+): List<IndexedChoiceOptionSnapshot> {
     return mapIndexedNotNull { index, value ->
         val predefinedOption = value.toChoiceOptionOrNull(
             useTextAsId = useTextAsId,
@@ -354,29 +401,35 @@ private fun List<NarrativeValue>.toChoiceOptions(
             includeDisabled = includeDisabled,
         )
         if (predefinedOption != null) {
-            return@mapIndexedNotNull predefinedOption
+            return@mapIndexedNotNull IndexedChoiceOptionSnapshot(index, predefinedOption)
         }
         if (value is NarrativeValue.HostObject && value.typeId == CHOICE_OPTION_TYPE_ID) {
             return@mapIndexedNotNull null
         }
         when (value) {
             NarrativeValue.Null -> if (includeDisabled) {
-                ChoiceOptionSnapshot(
-                    id = "__disabled_$index",
-                    text = "[Unavailable option]",
-                    target = -1,
-                    enabled = false,
+                IndexedChoiceOptionSnapshot(
+                    sourceIndex = index,
+                    option = ChoiceOptionSnapshot(
+                        id = "__disabled_$index",
+                        text = "[Unavailable option]",
+                        target = -1,
+                        enabled = false,
+                    )
                 )
             } else {
                 null
             }
             else -> {
                 val text = value.asText()
-                ChoiceOptionSnapshot(
-                    id = if (useTextAsId) text else index.toString(),
-                    text = text,
-                    target = -1,
-                    enabled = true,
+                IndexedChoiceOptionSnapshot(
+                    sourceIndex = index,
+                    option = ChoiceOptionSnapshot(
+                        id = if (useTextAsId) text else index.toString(),
+                        text = text,
+                        target = -1,
+                        enabled = true,
+                    )
                 )
             }
         }
@@ -401,3 +454,8 @@ private fun NarrativeValue.toChoiceOptionOrNull(
         enabled = option.enabled,
     )
 }
+
+private data class IndexedChoiceOptionSnapshot(
+    val sourceIndex: Int,
+    val option: ChoiceOptionSnapshot,
+)

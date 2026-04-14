@@ -135,6 +135,9 @@ class NarrativeStateSnapshotCodec(
                 resultTarget = serializeResultTarget(status.resultTarget),
                 nextInstructionPointer = status.nextInstructionPointer,
             )
+            is NarrativeTaskStatus.Failed -> NarrativeTaskStatusSnapshot.Failed(
+                message = status.message,
+            )
             NarrativeTaskStatus.Completed -> NarrativeTaskStatusSnapshot.Completed
         }
     }
@@ -145,6 +148,9 @@ class NarrativeStateSnapshotCodec(
             is NarrativeTaskStatusSnapshot.SuspendedCall -> NarrativeTaskStatus.SuspendedCall(
                 resultTarget = restoreResultTarget(status.resultTarget),
                 nextInstructionPointer = status.nextInstructionPointer,
+            )
+            is NarrativeTaskStatusSnapshot.Failed -> NarrativeTaskStatus.Failed(
+                message = status.message,
             )
             NarrativeTaskStatusSnapshot.Completed -> NarrativeTaskStatus.Completed
         }
