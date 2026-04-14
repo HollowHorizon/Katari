@@ -21,6 +21,9 @@ import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceOptionSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.SuspendableNarrativeFunctionDefinition
 import com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.toKotlite
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
+import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -259,6 +262,58 @@ class NarrativeBindingsTest {
         val task = instance.currentState().tasks.single()
         assertEquals(NarrativeTaskStatus.Completed, task.status)
         assertEquals(NarrativeValue.Bool(true), task.localVariables.getValue("ok"))
+    }
+
+    @Test
+    fun executionEnvironmentFunctionsAreAutoAvailableInNarrative() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+            registerKotliteFunction(
+                CustomFunctionDefinition(
+                    position = SourcePosition.NONE,
+                    receiverType = null,
+                    functionName = "shout",
+                    returnType = "String",
+                    parameterTypes = listOf(com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter("value", "String")),
+                    executable = { interpreter, _, args, _ ->
+                        StringValue((args.single() as StringValue).value.uppercase(), interpreter.symbolTable())
+                    },
+                )
+            )
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val v = shout("hello")
+                    "${'$'}v"
+                """.trimIndent(),
+            ),
+            initialState = NarrativeState(
+                programVersion = 1,
+                tasks = listOf(NarrativeTaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(listOf("HELLO"), events)
     }
 }
 

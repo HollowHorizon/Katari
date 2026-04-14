@@ -1,5 +1,23 @@
 package com.sunnychung.lib.multiplatform.kotlite.narrative
 
+import com.sunnychung.lib.multiplatform.kotlite.Interpreter
+import com.sunnychung.lib.multiplatform.kotlite.KotliteInterpreter
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.ClassDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
+import com.sunnychung.lib.multiplatform.kotlite.model.ExtensionProperty
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
+import com.sunnychung.lib.multiplatform.kotlite.model.GlobalProperty
+import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
+import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
+import com.sunnychung.lib.multiplatform.kotlite.model.LibraryModule
+import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
+import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ProvidedClassDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
+import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
+import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
 import kotlinx.serialization.KSerializer
 import kotlin.reflect.KClass
 
@@ -24,9 +42,12 @@ data class NarrativeBindings(
     val functionRegistry: NarrativeFunctionRegistry,
     val snapshotCodec: NarrativeStateSnapshotCodec,
     val globals: Map<String, NarrativeValue>,
+    val executionEnvironment: ExecutionEnvironment,
 )
 
 class NarrativeBindingsBuilder {
+    private val executionEnvironment = ExecutionEnvironment()
+    private var importExecutionEnvironmentFunctions = true
     private val functionDefinitions = mutableListOf<NarrativeFunctionDefinition>()
     private val valueCodecs = mutableListOf<NarrativeValueCodec<out NarrativeValueSnapshot>>()
     private val globals = linkedMapOf<String, NarrativeValue>()
@@ -34,6 +55,34 @@ class NarrativeBindingsBuilder {
 
     fun register(function: NarrativeFunctionDefinition): NarrativeBindingsBuilder = apply {
         functionDefinitions += function
+    }
+
+    fun importExecutionEnvironmentFunctions(enabled: Boolean): NarrativeBindingsBuilder = apply {
+        importExecutionEnvironmentFunctions = enabled
+    }
+
+    fun install(module: LibraryModule): NarrativeBindingsBuilder = apply {
+        executionEnvironment.install(module)
+    }
+
+    fun registerKotliteFunction(function: CustomFunctionDefinition): NarrativeBindingsBuilder = apply {
+        executionEnvironment.registerFunction(function)
+    }
+
+    fun registerKotliteExtensionProperty(property: ExtensionProperty): NarrativeBindingsBuilder = apply {
+        executionEnvironment.registerExtensionProperty(property)
+    }
+
+    fun registerKotliteGlobalProperty(property: GlobalProperty): NarrativeBindingsBuilder = apply {
+        executionEnvironment.registerGlobalProperty(property)
+    }
+
+    fun registerKotliteClass(clazz: ProvidedClassDefinition): NarrativeBindingsBuilder = apply {
+        executionEnvironment.registerClass(clazz)
+    }
+
+    fun configureExecutionEnvironment(configure: ExecutionEnvironment.() -> Unit): NarrativeBindingsBuilder = apply {
+        executionEnvironment.configure()
     }
 
     fun <T : Any> registerImmediateMember(
@@ -138,10 +187,19 @@ class NarrativeBindingsBuilder {
 
     fun build(): NarrativeBindings {
         val codecRegistry = NarrativeValueCodecRegistry(valueCodecs)
+        val bridge = if (importExecutionEnvironmentFunctions) {
+            buildExecutionEnvironmentNarrativeBridge(executionEnvironment)
+        } else {
+            null
+        }
+        val environmentDefinitions = bridge?.definitions ?: emptyList()
+        val environmentGlobals = bridge?.globals ?: emptyMap()
+        val normalizedGlobals = environmentGlobals + globals
         return NarrativeBindings(
-            functionRegistry = NarrativeFunctionRegistry(functionDefinitions),
+            functionRegistry = NarrativeFunctionRegistry(environmentDefinitions + functionDefinitions),
             snapshotCodec = NarrativeStateSnapshotCodec(valueCodecs = codecRegistry),
-            globals = globals.toMap(),
+            globals = normalizedGlobals,
+            executionEnvironment = executionEnvironment,
         )
     }
 
@@ -254,5 +312,187 @@ class SuspendableNarrativeFunctionDefinition(
         resume: (NarrativeFunctionResponse?) -> Unit,
     ) {
         onDispatch(arguments, context, resume)
+    }
+}
+
+private data class ExecutionEnvironmentNarrativeBridge(
+    val definitions: List<NarrativeFunctionDefinition>,
+    val globals: Map<String, NarrativeValue>,
+)
+
+private fun buildExecutionEnvironmentNarrativeBridge(
+    executionEnvironment: ExecutionEnvironment,
+): ExecutionEnvironmentNarrativeBridge {
+    val interpreter = KotliteInterpreter(
+        filename = "<NarrativeBridge>",
+        code = "",
+        executionEnvironment = executionEnvironment,
+    )
+    val declarations = executionEnvironment.getBuiltinFunctions(interpreter.symbolTable())
+    val groupedByName = declarations.groupBy { it.name }
+    val definitions = groupedByName.map { (name, overloads) ->
+        ExecutionEnvironmentNarrativeFunctionDefinition(
+            id = name,
+            interpreter = interpreter,
+            overloads = overloads,
+        )
+    }
+    val globals = executionEnvironment.getGlobalProperties(interpreter.symbolTable())
+        .mapNotNull { property ->
+            val getter = property.getter ?: return@mapNotNull null
+            property.declaredName to getter(interpreter).toNarrativeValue()
+        }
+        .toMap()
+    return ExecutionEnvironmentNarrativeBridge(
+        definitions = definitions,
+        globals = globals,
+    )
+}
+
+private class ExecutionEnvironmentNarrativeFunctionDefinition(
+    override val id: String,
+    private val interpreter: Interpreter,
+    private val overloads: List<FunctionDeclarationNode>,
+) : NarrativeFunctionDefinition {
+
+    override suspend fun startCall(
+        arguments: List<NarrativeValue>,
+        context: NarrativeFunctionContext,
+    ): NarrativeFunctionResult {
+        val runtimeResult = invokeOverload(arguments)
+        return NarrativeFunctionResult.Returned(runtimeResult.toNarrativeValue())
+    }
+
+    override suspend fun resumeCall(
+        arguments: List<NarrativeValue>,
+        response: NarrativeFunctionResponse?,
+        context: NarrativeFunctionContext,
+    ): NarrativeFunctionResult {
+        throw IllegalStateException("ExecutionEnvironment-backed function `$id` cannot be resumed because it never suspends")
+    }
+
+    override fun dispatch(
+        arguments: List<NarrativeValue>,
+        context: NarrativeFunctionDispatchContext,
+        resume: (NarrativeFunctionResponse?) -> Unit,
+    ) {
+        throw IllegalStateException("ExecutionEnvironment-backed function `$id` cannot be dispatched because it never suspends")
+    }
+
+    private fun invokeOverload(arguments: List<NarrativeValue>): RuntimeValue {
+        val filtered = overloads.filter { overload ->
+            val receiverOffset = if (overload.receiver != null) 1 else 0
+            if (arguments.size != overload.valueParameters.size + receiverOffset) {
+                return@filter false
+            }
+            if (overload.receiver != null) {
+                val receiverArgument = arguments.first()
+                val receiverType = overload.receiver
+                if (!receiverType.matches(receiverArgument)) {
+                    return@filter false
+                }
+            }
+            overload.valueParameters.withIndex().all { (index, parameter) ->
+                val argumentIndex = if (overload.receiver != null) index + 1 else index
+                val declaredType = parameter.declaredType ?: return@all true
+                declaredType.matches(arguments[argumentIndex])
+            }
+        }
+        val overload = filtered.firstOrNull()
+        if (overload != null) {
+            val (receiver, callArgs) = splitReceiver(overload, arguments)
+            return overload.execute(
+                interpreter = interpreter,
+                receiver = receiver,
+                arguments = callArgs,
+                typeArguments = emptyMap(),
+            )
+        }
+        return invokeConstructorIfAvailable(id, arguments)
+            ?: throw IllegalArgumentException(
+                "No ExecutionEnvironment callable of `$id` matches narrative arguments: $arguments"
+            )
+    }
+
+    private fun splitReceiver(
+        overload: FunctionDeclarationNode,
+        arguments: List<NarrativeValue>,
+    ): Pair<RuntimeValue?, List<RuntimeValue>> {
+        val receiver = if (overload.receiver != null) {
+            arguments.first().toRuntimeValue(interpreter)
+        } else {
+            null
+        }
+        val callArgs = if (overload.receiver != null) {
+            arguments.drop(1)
+        } else {
+            arguments
+        }.map { it.toRuntimeValue(interpreter) }
+        return receiver to callArgs
+    }
+
+    private fun invokeConstructorIfAvailable(name: String, arguments: List<NarrativeValue>): RuntimeValue? {
+        val clazz = interpreter.symbolTable().findClass(name)?.first ?: return null
+        if (!clazz.isInstanceCreationAllowed) {
+            return null
+        }
+        return clazz.construct(
+            interpreter = interpreter,
+            callArguments = arguments.map { it.toRuntimeValue(interpreter) }.toTypedArray(),
+            typeArguments = emptyArray(),
+            callPosition = SourcePosition.NONE,
+        )
+    }
+}
+
+private fun com.sunnychung.lib.multiplatform.kotlite.model.TypeNode.matches(value: NarrativeValue): Boolean {
+    if (value == NarrativeValue.Null) {
+        return isNullable
+    }
+    return when (name) {
+        "Any" -> true
+        "String" -> value is NarrativeValue.Text || value is NarrativeValue.Entity
+        "Boolean" -> value is NarrativeValue.Bool
+        "Int" -> value is NarrativeValue.Int32
+        "Double" -> value is NarrativeValue.Float64 || value is NarrativeValue.Int32
+        else -> value is NarrativeValue.HostObject && value.typeId == name
+    }
+}
+
+private fun NarrativeValue.toRuntimeValue(interpreter: Interpreter): RuntimeValue {
+    val symbolTable = interpreter.symbolTable()
+    return when (this) {
+        NarrativeValue.Null -> NullValue
+        is NarrativeValue.Bool -> BooleanValue(value, symbolTable)
+        is NarrativeValue.Int32 -> IntValue(value, symbolTable)
+        is NarrativeValue.Float64 -> DoubleValue(value, symbolTable)
+        is NarrativeValue.Text -> StringValue(value, symbolTable)
+        is NarrativeValue.Entity -> StringValue(id, symbolTable)
+        is NarrativeValue.HostObject -> {
+            value as? RuntimeValue
+                ?: throw IllegalArgumentException(
+                    "ExecutionEnvironment bridge cannot convert HostObject(typeId=$typeId) to RuntimeValue automatically. " +
+                        "Use RuntimeValue-backed objects or narrative-native functions for this call."
+                )
+        }
+    }
+}
+
+private fun RuntimeValue.toNarrativeValue(): NarrativeValue {
+    return when (this) {
+        NullValue -> NarrativeValue.Null
+        is BooleanValue -> NarrativeValue.Bool(value)
+        is IntValue -> NarrativeValue.Int32(value)
+        is DoubleValue -> NarrativeValue.Float64(value)
+        is StringValue -> NarrativeValue.Text(value)
+        is KotlinValueHolder<*> -> {
+            val unwrapped = value
+            if (unwrapped == null) {
+                NarrativeValue.Null
+            } else {
+                NarrativeValue.HostObject(typeId = type().name, value = unwrapped)
+            }
+        }
+        else -> NarrativeValue.HostObject(typeId = type().name, value = this)
     }
 }

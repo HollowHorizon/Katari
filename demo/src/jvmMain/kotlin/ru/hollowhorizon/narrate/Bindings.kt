@@ -17,7 +17,7 @@ data class NarrativeObject(val name: String, val age: Int, val weight: Double)
 fun defaultBindings(host: NarrativeHost) = NarrativeBindings {
     val narrativeObjectType = NarrativeObject::class.toKotlite("narrative_object")
 
-
+    install(AllStdLibModules())
     register(NarrativeBuiltinFunctions.definitions(host))
     registerHostType(
         type = narrativeObjectType,
