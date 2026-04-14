@@ -112,6 +112,7 @@ sealed interface NarrativeValue {
     data object Null : NarrativeValue
     data class Bool(val value: Boolean) : NarrativeValue
     data class Int32(val value: Int) : NarrativeValue
+    data class Float64(val value: Double) : NarrativeValue
     data class Text(val value: String) : NarrativeValue
     data class Entity(val id: String) : NarrativeValue
     data class HostObject(val typeId: String, val value: Any) : NarrativeValue
@@ -282,6 +283,10 @@ data class BoolValueSnapshot(val value: Boolean) : NarrativeValueSnapshot()
 data class Int32ValueSnapshot(val value: Int) : NarrativeValueSnapshot()
 
 @Serializable
+@SerialName("double")
+data class Float64ValueSnapshot(val value: Double) : NarrativeValueSnapshot()
+
+@Serializable
 @SerialName("text")
 data class TextValueSnapshot(val value: String) : NarrativeValueSnapshot()
 
@@ -339,6 +344,7 @@ data class NarrativeValueCodecRegistry(
                 subclass(NullValueSnapshot::class, NullValueSnapshot.serializer())
                 subclass(BoolValueSnapshot::class, BoolValueSnapshot.serializer())
                 subclass(Int32ValueSnapshot::class, Int32ValueSnapshot.serializer())
+                subclass(Float64ValueSnapshot::class, Float64ValueSnapshot.serializer())
                 subclass(TextValueSnapshot::class, TextValueSnapshot.serializer())
                 subclass(EntityValueSnapshot::class, EntityValueSnapshot.serializer())
                 codecsByTypeId.values.forEach {

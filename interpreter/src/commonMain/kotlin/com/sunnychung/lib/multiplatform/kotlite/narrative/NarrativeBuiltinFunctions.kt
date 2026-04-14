@@ -19,18 +19,17 @@ data object NarrativeNoOpHost : NarrativeHost {
 object NarrativeBuiltinFunctions {
 
     fun registry(host: NarrativeHost): NarrativeFunctionRegistry {
-        return NarrativeFunctionRegistry(
-            listOf(
-                NarrateFunction(host),
-                SayFunction(host),
-                ChoiceFunction(host),
-                ChooseFunction(host),
-                ChooseIndexedFunction(host),
-                ChooseExhaustibleFunction(host),
-                ChoiceOptionFunction,
-                ReadLineFunction(host),
-                LowercaseFunction,
-            )
+        return NarrativeFunctionRegistry(definitions(host))
+    }
+
+    fun definitions(host: NarrativeHost): List<NarrativeFunctionDefinition> {
+        return listOf(
+            NarrateFunction(host),
+            ChooseFunction(host),
+            ChooseIndexedFunction(host),
+            ChooseExhaustibleFunction(host),
+            ChoiceOptionFunction,
+            ReadLineFunction(host)
         )
     }
 
@@ -59,74 +58,8 @@ object NarrativeBuiltinFunctions {
             context: NarrativeFunctionDispatchContext,
             resume: (NarrativeFunctionResponse?) -> Unit,
         ) {
-            host.narrate(arguments.single().asText()) {
+            host.narrate(arguments.single().asStringCompatible()) {
                 resume(NarrativeFunctionResponse.Ack)
-            }
-        }
-    }
-
-    private class SayFunction(private val host: NarrativeHost) : NarrativeFunctionDefinition {
-        override val id: String = "say"
-
-        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
-            require(arguments.size == 2) { "`say` expects receiver and text" }
-            return NarrativeFunctionResult.Suspended
-        }
-
-        override suspend fun resumeCall(
-            arguments: List<NarrativeValue>,
-            response: NarrativeFunctionResponse?,
-            context: NarrativeFunctionContext,
-        ): NarrativeFunctionResult {
-            require(arguments.size == 2) { "`say` expects receiver and text" }
-            require(response == null || response == NarrativeFunctionResponse.Ack) {
-                "`say` only accepts acknowledgement"
-            }
-            return NarrativeFunctionResult.Returned()
-        }
-
-        override fun dispatch(
-            arguments: List<NarrativeValue>,
-            context: NarrativeFunctionDispatchContext,
-            resume: (NarrativeFunctionResponse?) -> Unit,
-        ) {
-            host.say(arguments[0].toSpeakerSnapshot(), arguments[1].asText()) {
-                resume(NarrativeFunctionResponse.Ack)
-            }
-        }
-    }
-
-    private class ChoiceFunction(private val host: NarrativeHost) : NarrativeFunctionDefinition {
-        override val id: String = "choice"
-
-        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
-            require(arguments.isNotEmpty()) { "`choice` expects at least one option" }
-            return NarrativeFunctionResult.Suspended
-        }
-
-        override suspend fun resumeCall(
-            arguments: List<NarrativeValue>,
-            response: NarrativeFunctionResponse?,
-            context: NarrativeFunctionContext,
-        ): NarrativeFunctionResult {
-            val selection = response as? NarrativeFunctionResponse.ChoiceSelection
-                ?: throw IllegalArgumentException("`choice` expects a choice selection response")
-            val options = arguments.toChoiceOptions(useTextAsId = false, includeDisabled = true)
-                .filter { it.enabled }
-                .map { it.id }
-            require(selection.optionId in options) {
-                "Unknown choice `${selection.optionId}`"
-            }
-            return NarrativeFunctionResult.Returned(NarrativeValue.Text(selection.optionId))
-        }
-
-        override fun dispatch(
-            arguments: List<NarrativeValue>,
-            context: NarrativeFunctionDispatchContext,
-            resume: (NarrativeFunctionResponse?) -> Unit,
-        ) {
-            host.choose(arguments.toChoiceOptions(useTextAsId = false, includeDisabled = true)) { optionId ->
-                resume(NarrativeFunctionResponse.ChoiceSelection(optionId))
             }
         }
     }
@@ -241,7 +174,7 @@ object NarrativeBuiltinFunctions {
 
         override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
             require(arguments.size == 4) { "`choiceOption` expects (text, visible, enabled, disabledTextOrNull)" }
-            val text = arguments[0].asText()
+            val text = arguments[0].asStringCompatible()
             val visible = arguments[1].asBoolean()
             val enabled = arguments[2].asBoolean()
             val disabledText = arguments[3].asNullableText()
@@ -300,36 +233,9 @@ object NarrativeBuiltinFunctions {
             context: NarrativeFunctionDispatchContext,
             resume: (NarrativeFunctionResponse?) -> Unit,
         ) {
-            host.readLine(arguments.single().asText()) { line ->
+            host.readLine(arguments.single().asStringCompatible()) { line ->
                 resume(NarrativeTextResponse(line))
             }
-        }
-    }
-
-    private data object LowercaseFunction : NarrativeFunctionDefinition {
-        override val id: String = "lowercase"
-
-        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
-            require(arguments.size == 1) { "`lowercase` expects a single receiver" }
-            return NarrativeFunctionResult.Returned(
-                NarrativeValue.Text(arguments.single().asText().lowercase())
-            )
-        }
-
-        override suspend fun resumeCall(
-            arguments: List<NarrativeValue>,
-            response: NarrativeFunctionResponse?,
-            context: NarrativeFunctionContext,
-        ): NarrativeFunctionResult {
-            throw IllegalStateException("`lowercase` cannot be resumed because it never suspends")
-        }
-
-        override fun dispatch(
-            arguments: List<NarrativeValue>,
-            context: NarrativeFunctionDispatchContext,
-            resume: (NarrativeFunctionResponse?) -> Unit,
-        ) {
-            throw IllegalStateException("`lowercase` cannot be dispatched because it never suspends")
         }
     }
 }
@@ -353,6 +259,18 @@ private fun NarrativeValue.asText(): String {
         is NarrativeValue.Text -> value
         is NarrativeValue.Entity -> id
         else -> throw IllegalArgumentException("Expected text-compatible value but got $this")
+    }
+}
+
+private fun NarrativeValue.asStringCompatible(): String {
+    return when (this) {
+        NarrativeValue.Null -> "null"
+        is NarrativeValue.Bool -> value.toString()
+        is NarrativeValue.Int32 -> value.toString()
+        is NarrativeValue.Float64 -> value.toString()
+        is NarrativeValue.Text -> value
+        is NarrativeValue.Entity -> id
+        is NarrativeValue.HostObject -> value.toString()
     }
 }
 
@@ -421,7 +339,7 @@ private fun List<NarrativeValue>.toChoiceOptionsWithSourceIndex(
                 null
             }
             else -> {
-                val text = value.asText()
+                val text = value.asStringCompatible()
                 IndexedChoiceOptionSnapshot(
                     sourceIndex = index,
                     option = ChoiceOptionSnapshot(

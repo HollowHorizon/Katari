@@ -57,6 +57,7 @@ class NarrativeStateSnapshotCodec(
             NarrativeValue.Null -> NullValueSnapshot
             is NarrativeValue.Bool -> BoolValueSnapshot(value.value)
             is NarrativeValue.Int32 -> Int32ValueSnapshot(value.value)
+            is NarrativeValue.Float64 -> Float64ValueSnapshot(value.value)
             is NarrativeValue.Text -> TextValueSnapshot(value.value)
             is NarrativeValue.Entity -> EntityValueSnapshot(value.id)
             is NarrativeValue.HostObject -> {
@@ -89,6 +90,7 @@ class NarrativeStateSnapshotCodec(
             NullValueSnapshot -> NarrativeValue.Null
             is BoolValueSnapshot -> NarrativeValue.Bool(snapshot.value)
             is Int32ValueSnapshot -> NarrativeValue.Int32(snapshot.value)
+            is Float64ValueSnapshot -> NarrativeValue.Float64(snapshot.value)
             is TextValueSnapshot -> NarrativeValue.Text(snapshot.value)
             is EntityValueSnapshot -> NarrativeValue.Entity(snapshot.id)
             is ChoiceOptionValueSnapshot -> NarrativeValue.HostObject(

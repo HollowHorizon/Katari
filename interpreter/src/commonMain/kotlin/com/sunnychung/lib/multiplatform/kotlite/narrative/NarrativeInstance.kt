@@ -475,8 +475,8 @@ class NarrativeInstance(
             is UnaryExpression -> {
                 val operand = evaluateExpression(state, task, expression.operand)
                 when (expression.operator) {
-                    NarrativeUnaryOperator.Plus -> NarrativeValue.Int32(operand.asInt())
-                    NarrativeUnaryOperator.Minus -> NarrativeValue.Int32(-operand.asInt())
+                    NarrativeUnaryOperator.Plus -> operand.numericIdentity()
+                    NarrativeUnaryOperator.Minus -> operand.negateNumeric()
                     NarrativeUnaryOperator.Not -> NarrativeValue.Bool(!operand.asBoolean())
                 }
             }
@@ -487,15 +487,52 @@ class NarrativeInstance(
                         val right = evaluateExpression(state, task, expression.right)
                         if (left is NarrativeValue.Text || right is NarrativeValue.Text) {
                             NarrativeValue.Text(left.asString() + right.asString())
+                        } else if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                            NarrativeValue.Float64(left.asDouble() + right.asDouble())
                         } else {
                             NarrativeValue.Int32(left.asInt() + right.asInt())
                         }
                     }
-                    NarrativeBinaryOperator.Subtract -> NarrativeValue.Int32(left.asInt() - evaluateExpression(state, task, expression.right).asInt())
-                    NarrativeBinaryOperator.LessThan -> NarrativeValue.Bool(left.asInt() < evaluateExpression(state, task, expression.right).asInt())
-                    NarrativeBinaryOperator.LessThanOrEquals -> NarrativeValue.Bool(left.asInt() <= evaluateExpression(state, task, expression.right).asInt())
-                    NarrativeBinaryOperator.GreaterThan -> NarrativeValue.Bool(left.asInt() > evaluateExpression(state, task, expression.right).asInt())
-                    NarrativeBinaryOperator.GreaterThanOrEquals -> NarrativeValue.Bool(left.asInt() >= evaluateExpression(state, task, expression.right).asInt())
+                    NarrativeBinaryOperator.Subtract -> {
+                        val right = evaluateExpression(state, task, expression.right)
+                        if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                            NarrativeValue.Float64(left.asDouble() - right.asDouble())
+                        } else {
+                            NarrativeValue.Int32(left.asInt() - right.asInt())
+                        }
+                    }
+                    NarrativeBinaryOperator.LessThan -> {
+                        val right = evaluateExpression(state, task, expression.right)
+                        if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                            NarrativeValue.Bool(left.asDouble() < right.asDouble())
+                        } else {
+                            NarrativeValue.Bool(left.asInt() < right.asInt())
+                        }
+                    }
+                    NarrativeBinaryOperator.LessThanOrEquals -> {
+                        val right = evaluateExpression(state, task, expression.right)
+                        if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                            NarrativeValue.Bool(left.asDouble() <= right.asDouble())
+                        } else {
+                            NarrativeValue.Bool(left.asInt() <= right.asInt())
+                        }
+                    }
+                    NarrativeBinaryOperator.GreaterThan -> {
+                        val right = evaluateExpression(state, task, expression.right)
+                        if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                            NarrativeValue.Bool(left.asDouble() > right.asDouble())
+                        } else {
+                            NarrativeValue.Bool(left.asInt() > right.asInt())
+                        }
+                    }
+                    NarrativeBinaryOperator.GreaterThanOrEquals -> {
+                        val right = evaluateExpression(state, task, expression.right)
+                        if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                            NarrativeValue.Bool(left.asDouble() >= right.asDouble())
+                        } else {
+                            NarrativeValue.Bool(left.asInt() >= right.asInt())
+                        }
+                    }
                     NarrativeBinaryOperator.Equals -> NarrativeValue.Bool(left == evaluateExpression(state, task, expression.right))
                     NarrativeBinaryOperator.NotEquals -> NarrativeValue.Bool(left != evaluateExpression(state, task, expression.right))
                     NarrativeBinaryOperator.And -> NarrativeValue.Bool(left.asBoolean() && evaluateExpression(state, task, expression.right).asBoolean())
@@ -597,11 +634,36 @@ class NarrativeInstance(
         }
     }
 
+    private fun NarrativeValue.asDouble(): Double {
+        return when (this) {
+            is NarrativeValue.Int32 -> value.toDouble()
+            is NarrativeValue.Float64 -> value
+            else -> throw IllegalArgumentException("Expected numeric value but got $this")
+        }
+    }
+
+    private fun NarrativeValue.numericIdentity(): NarrativeValue {
+        return when (this) {
+            is NarrativeValue.Int32 -> this
+            is NarrativeValue.Float64 -> this
+            else -> throw IllegalArgumentException("Expected numeric value but got $this")
+        }
+    }
+
+    private fun NarrativeValue.negateNumeric(): NarrativeValue {
+        return when (this) {
+            is NarrativeValue.Int32 -> NarrativeValue.Int32(-value)
+            is NarrativeValue.Float64 -> NarrativeValue.Float64(-value)
+            else -> throw IllegalArgumentException("Expected numeric value but got $this")
+        }
+    }
+
     private fun NarrativeValue.asString(): String {
         return when (this) {
             NarrativeValue.Null -> "null"
             is NarrativeValue.Bool -> value.toString()
             is NarrativeValue.Int32 -> value.toString()
+            is NarrativeValue.Float64 -> value.toString()
             is NarrativeValue.Text -> value
             is NarrativeValue.Entity -> id
             is NarrativeValue.HostObject -> value.toString()

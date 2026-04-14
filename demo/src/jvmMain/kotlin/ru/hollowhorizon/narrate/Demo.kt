@@ -1,15 +1,14 @@
 package ru.hollowhorizon.narrate
 
 import com.sunnychung.lib.multiplatform.kotlite.narrative.KotliteNarrativeProgram
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBuiltinFunctions
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionRegistry
+import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBindings
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeInstance
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeProgram
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeStateSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeStateSnapshotCodec
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskState
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValue
+import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,13 +21,13 @@ import java.io.File
 
 fun main() = runBlocking {
     val host = SwingNarrativeHost()
+    val bindings = defaultBindings(host)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val program = KotliteNarrativeProgram(
         filename = "<Narrative>",
         code = SwingNarrativeHost::class.java.getResource("/script.ktlite")!!.readText(),
     )
-    val functionRegistry = NarrativeBuiltinFunctions.registry(host)
-    val snapshotCodec = NarrativeStateSnapshotCodec()
+    val snapshotCodec = bindings.snapshotCodec
     val json = Json {
         serializersModule = snapshotCodec.serializersModule()
         classDiscriminator = "kind"
@@ -41,10 +40,12 @@ fun main() = runBlocking {
     var currentInstance = createInstance(
         program = program,
         initialState = initialState(program),
-        functionRegistry = functionRegistry,
-        snapshotCodec = snapshotCodec,
+        bindings = bindings,
         scope = scope,
     )
+    attachFailureMonitor(host, currentInstance, scope) { monitored ->
+        currentInstance === monitored
+    }
 
     fun replaceInstance(state: NarrativeState, clearTranscript: Boolean) {
         currentInstance.cancel()
@@ -54,10 +55,12 @@ fun main() = runBlocking {
         currentInstance = createInstance(
             program = program,
             initialState = state,
-            functionRegistry = functionRegistry,
-            snapshotCodec = snapshotCodec,
+            bindings = bindings,
             scope = scope,
         )
+        attachFailureMonitor(host, currentInstance, scope) { monitored ->
+            currentInstance === monitored
+        }
         host.setStatus("Running")
         currentInstance.start()
     }
@@ -98,18 +101,40 @@ fun main() = runBlocking {
     currentInstance.start()
 }
 
+private fun attachFailureMonitor(
+    host: SwingNarrativeHost,
+    instance: NarrativeInstance,
+    scope: CoroutineScope,
+    isCurrentInstance: (NarrativeInstance) -> Boolean,
+) {
+    scope.launch {
+        instance.join()
+        if (!isCurrentInstance(instance)) {
+            return@launch
+        }
+        val failedMessage = instance.currentState().tasks
+            .mapNotNull { (it.status as? NarrativeTaskStatus.Failed)?.message }
+            .firstOrNull()
+        if (failedMessage != null) {
+            host.setStatus("Failed")
+            host.showError("Narrative execution failed", IllegalStateException(failedMessage))
+        } else {
+            host.setStatus("Completed")
+        }
+    }
+}
+
 private fun createInstance(
     program: NarrativeProgram,
     initialState: NarrativeState,
-    functionRegistry: NarrativeFunctionRegistry,
-    snapshotCodec: NarrativeStateSnapshotCodec,
+    bindings: NarrativeBindings,
     scope: CoroutineScope,
 ): NarrativeInstance {
     return NarrativeInstance(
         program = program,
-        initialState = initialState,
-        functionRegistry = functionRegistry,
-        snapshotCodec = snapshotCodec,
+        initialState = initialState.copy(globals = bindings.globals),
+        functionRegistry = bindings.functionRegistry,
+        snapshotCodec = bindings.snapshotCodec,
         coroutineScope = scope,
     )
 }

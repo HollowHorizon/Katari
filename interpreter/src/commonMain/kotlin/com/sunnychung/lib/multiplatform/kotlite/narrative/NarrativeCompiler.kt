@@ -7,6 +7,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.BreakNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BooleanNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ContinueNode
+import com.sunnychung.lib.multiplatform.kotlite.model.DoubleNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IfNode
@@ -672,6 +673,7 @@ class NarrativeCompiler {
         return when (expression) {
             is BooleanNode -> LiteralExpression(NarrativeValue.Bool(expression.value))
             is IntegerNode -> LiteralExpression(NarrativeValue.Int32(expression.value))
+            is DoubleNode -> LiteralExpression(NarrativeValue.Float64(expression.value))
             NullNode -> LiteralExpression(NarrativeValue.Null)
             is StringLiteralNode -> LiteralExpression(NarrativeValue.Text(expression.content))
             is StringNode -> compileStringExpression(expression, instructions)
