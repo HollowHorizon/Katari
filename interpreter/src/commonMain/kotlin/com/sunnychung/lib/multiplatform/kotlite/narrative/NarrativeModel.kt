@@ -33,6 +33,12 @@ data class SetVariableInstruction(
     override val position: SourcePosition? = null,
 ) : NarrativeInstruction
 
+data class SetResultInstruction(
+    val target: NarrativeResultTarget,
+    val expression: NarrativeExpression,
+    override val position: SourcePosition? = null,
+) : NarrativeInstruction
+
 data class ConditionalJumpInstruction(
     val condition: NarrativeExpression,
     val falseTarget: Int,
@@ -62,6 +68,11 @@ data class VariableExpression(val name: String) : NarrativeExpression
 
 data class SlotExpression(val slot: Int) : NarrativeExpression
 
+data class UnaryExpression(
+    val operator: NarrativeUnaryOperator,
+    val operand: NarrativeExpression,
+) : NarrativeExpression
+
 data class BinaryExpression(
     val left: NarrativeExpression,
     val operator: NarrativeBinaryOperator,
@@ -71,6 +82,12 @@ data class BinaryExpression(
 sealed interface NarrativeResultTarget {
     data class Variable(val name: String) : NarrativeResultTarget
     data class Slot(val slot: Int) : NarrativeResultTarget
+}
+
+enum class NarrativeUnaryOperator {
+    Plus,
+    Minus,
+    Not,
 }
 
 enum class NarrativeBinaryOperator {
@@ -128,6 +145,7 @@ data class ChoiceOptionSnapshot(
     val id: String,
     val text: String,
     val target: Int,
+    val enabled: Boolean = true,
 )
 
 @Serializable
@@ -257,6 +275,16 @@ data class TextValueSnapshot(val value: String) : NarrativeValueSnapshot()
 @Serializable
 @SerialName("entity")
 data class EntityValueSnapshot(val id: String) : NarrativeValueSnapshot()
+
+@Serializable
+@SerialName("choice_option")
+data class ChoiceOptionValueSnapshot(
+    val id: String,
+    val text: String,
+    val visible: Boolean,
+    val enabled: Boolean,
+    val disabledText: String? = null,
+) : NarrativeValueSnapshot()
 
 interface NarrativeValueCodec<S : NarrativeValueSnapshot> {
     val typeId: String

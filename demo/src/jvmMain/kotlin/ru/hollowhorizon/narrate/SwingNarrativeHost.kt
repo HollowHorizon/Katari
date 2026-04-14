@@ -4,6 +4,7 @@ import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceOptionSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.EntityValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeHost
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
@@ -129,6 +130,7 @@ class SwingNarrativeHost : NarrativeHost {
     override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) {
         val speakerName = when (speaker) {
             is EntityValueSnapshot -> speaker.id
+            is TextValueSnapshot -> speaker.value
             else -> "unknown"
         }
         showText("$speakerName: $text")
@@ -145,11 +147,14 @@ class SwingNarrativeHost : NarrativeHost {
                 val button = JButton(option.text)
                 button.alignmentX = JPanel.LEFT_ALIGNMENT
                 button.maximumSize = Dimension(Int.MAX_VALUE, 32)
-                button.addActionListener {
-                    disableAllChoiceButtons()
-                    appendLog("> ${option.text}")
-                    clearChoices()
-                    resume(option.text)
+                button.isEnabled = option.enabled
+                if (option.enabled) {
+                    button.addActionListener {
+                        disableAllChoiceButtons()
+                        appendLog("> ${option.text}")
+                        clearChoices()
+                        resume(option.id)
+                    }
                 }
                 choicesPanel.add(button)
             }
@@ -159,9 +164,9 @@ class SwingNarrativeHost : NarrativeHost {
         }
     }
 
-    override fun readLine(resume: (String) -> Unit) {
+    override fun readLine(question: String, resume: (String) -> Unit) {
         SwingUtilities.invokeLater {
-            val value = JOptionPane.showInputDialog(frame, "Enter response") ?: ""
+            val value = JOptionPane.showInputDialog(frame, question) ?: ""
             appendLog("> $value")
             resume(value)
         }

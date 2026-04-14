@@ -1,10 +1,12 @@
 package com.sunnychung.lib.multiplatform.kotlite.narrative
 
 import kotlinx.serialization.modules.SerializersModule
+import kotlinx.serialization.modules.plus
+import kotlinx.serialization.modules.polymorphic
+import kotlinx.serialization.modules.subclass
 
 class NarrativeStateSnapshotCodec(
     private val valueCodecs: NarrativeValueCodecRegistry = NarrativeValueCodecRegistry(emptyList()),
-    functionRegistry: NarrativeFunctionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
 ) {
 
     fun serialize(state: NarrativeState): NarrativeStateSnapshot {
@@ -43,7 +45,11 @@ class NarrativeStateSnapshotCodec(
     }
 
     fun serializersModule(): SerializersModule {
-        return valueCodecs.serializersModule()
+        return valueCodecs.serializersModule() + SerializersModule {
+            polymorphic(NarrativeValueSnapshot::class) {
+                subclass(ChoiceOptionValueSnapshot::class, ChoiceOptionValueSnapshot.serializer())
+            }
+        }
     }
 
     private fun serializeValue(value: NarrativeValue): NarrativeValueSnapshot {
@@ -54,9 +60,23 @@ class NarrativeStateSnapshotCodec(
             is NarrativeValue.Text -> TextValueSnapshot(value.value)
             is NarrativeValue.Entity -> EntityValueSnapshot(value.id)
             is NarrativeValue.HostObject -> {
-                @Suppress("UNCHECKED_CAST")
-                (valueCodecs.codec(value.typeId) as NarrativeValueCodec<NarrativeValueSnapshot>)
-                    .serialize(value.value)
+                if (value.typeId == CHOICE_OPTION_TYPE_ID) {
+                    val option = value.value as? ChoiceOptionValue
+                        ?: throw IllegalArgumentException(
+                            "Internal choice option value is corrupted: expected ChoiceOptionValue but got `${value.value::class.simpleName}`"
+                        )
+                    ChoiceOptionValueSnapshot(
+                        id = option.id,
+                        text = option.text,
+                        visible = option.visible,
+                        enabled = option.enabled,
+                        disabledText = option.disabledText,
+                    )
+                } else {
+                    @Suppress("UNCHECKED_CAST")
+                    (valueCodecs.codec(value.typeId) as NarrativeValueCodec<NarrativeValueSnapshot>)
+                        .serialize(value.value)
+                }
             }
         }
     }
@@ -71,6 +91,16 @@ class NarrativeStateSnapshotCodec(
             is Int32ValueSnapshot -> NarrativeValue.Int32(snapshot.value)
             is TextValueSnapshot -> NarrativeValue.Text(snapshot.value)
             is EntityValueSnapshot -> NarrativeValue.Entity(snapshot.id)
+            is ChoiceOptionValueSnapshot -> NarrativeValue.HostObject(
+                typeId = CHOICE_OPTION_TYPE_ID,
+                value = ChoiceOptionValue(
+                    id = snapshot.id,
+                    text = snapshot.text,
+                    visible = snapshot.visible,
+                    enabled = snapshot.enabled,
+                    disabledText = snapshot.disabledText,
+                )
+            )
             else -> {
                 val codec = valueCodecs.codec(snapshot)
                 NarrativeValue.HostObject(

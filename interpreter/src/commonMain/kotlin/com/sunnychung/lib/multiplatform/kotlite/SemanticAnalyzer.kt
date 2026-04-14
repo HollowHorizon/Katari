@@ -61,6 +61,10 @@ import com.sunnychung.lib.multiplatform.kotlite.model.IntegerNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LabelNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LongNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NothingType
 import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
@@ -345,6 +349,10 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
             is EnumEntryNode -> this.visit(modifier = modifier)
             is ForNode -> this.visit(modifier = modifier)
             is ValueParameterDeclarationNode -> this.visit(modifier = modifier)
+            is NarrativeCheckpointNode -> {}
+            is NarrativeJumpNode -> {}
+            is NarrativeChooseNode -> {}
+            is NarrativeChooseEntryNode -> {}
         }
     }
 
@@ -2648,6 +2656,10 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
             is EnumEntryNode -> TODO()
             is ForNode -> typeRegistry["Unit"]!!
             is ValueParameterDeclarationNode -> TODO()
+            is NarrativeCheckpointNode -> typeRegistry["Unit"]!!
+            is NarrativeJumpNode -> typeRegistry["Unit"]!!
+            is NarrativeChooseNode -> typeRegistry["Unit"]!!
+            is NarrativeChooseEntryNode -> typeRegistry["Unit"]!!
     }
 
     fun BinaryOpNode.type(modifier: ResolveTypeModifier = ResolveTypeModifier()): TypeNode {

@@ -70,6 +70,10 @@ import com.sunnychung.lib.multiplatform.kotlite.model.LambdaValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ListValue
 import com.sunnychung.lib.multiplatform.kotlite.model.LongNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LongValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
@@ -192,6 +196,10 @@ open class Interpreter(val rootNode: ASTNode, val executionEnvironment: Executio
             is EnumEntryNode -> TODO()
             is ForNode -> this.eval()
             is ValueParameterDeclarationNode -> TODO()
+            is NarrativeCheckpointNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
+            is NarrativeJumpNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
+            is NarrativeChooseNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
+            is NarrativeChooseEntryNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
         }
     }
 

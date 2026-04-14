@@ -28,7 +28,7 @@ fun main() = runBlocking {
         code = SwingNarrativeHost::class.java.getResource("/script.ktlite")!!.readText(),
     )
     val functionRegistry = NarrativeBuiltinFunctions.registry(host)
-    val snapshotCodec = NarrativeStateSnapshotCodec(functionRegistry = functionRegistry)
+    val snapshotCodec = NarrativeStateSnapshotCodec()
     val json = Json {
         serializersModule = snapshotCodec.serializersModule()
         classDiscriminator = "kind"
@@ -118,7 +118,7 @@ private fun initialState(program: NarrativeProgram): NarrativeState {
     return NarrativeState(
         programVersion = program.version,
         tasks = listOf(NarrativeTaskState(id = program.entryTaskId)),
-        globals = mapOf("npc" to NarrativeValue.Entity("npc_1")),
+        globals = emptyMap(),
     )
 }
 

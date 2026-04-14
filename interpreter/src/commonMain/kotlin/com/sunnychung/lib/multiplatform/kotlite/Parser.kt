@@ -2570,11 +2570,14 @@ open class Parser(protected val lexer: Lexer) {
         }
     }
 
+    protected open fun customStatementOrNull(): ASTNode? = null
+
     /**
      * statement:
      *     {label | annotation} (declaration | assignment | loopStatement | expression)
      */
     fun statement(): ASTNode { // TODO complete
+        customStatementOrNull()?.let { return it }
         if (currentToken.type == TokenType.Identifier) {
             when (currentToken.value) {
                 "interface" -> return declaration(isInterface = true)

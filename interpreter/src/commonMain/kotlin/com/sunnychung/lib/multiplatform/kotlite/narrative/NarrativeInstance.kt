@@ -17,9 +17,12 @@ class NarrativeInstance(
         tasks = listOf(NarrativeTaskState(id = program.entryTaskId)),
     ),
     private val functionRegistry: NarrativeFunctionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
-    private val snapshotCodec: NarrativeStateSnapshotCodec = NarrativeStateSnapshotCodec(functionRegistry = functionRegistry),
+    private val snapshotCodec: NarrativeStateSnapshotCodec = NarrativeStateSnapshotCodec(),
     coroutineScope: CoroutineScope? = null,
 ) {
+    companion object {
+        private const val SLOT_VARIABLE_PREFIX = "__narrative_slot_"
+    }
 
     private val ownsScope = coroutineScope == null
     private val scope = coroutineScope ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -106,17 +109,40 @@ class NarrativeInstance(
                     when (val instruction = program.instructions[task.instructionPointer]) {
                         is CallFunctionInstruction -> nextEffectToDispatch = executeFunctionCallLocked(taskIndex, task, instruction)
                         is SetVariableInstruction -> {
+                            val referencedSlots = collectReferencedSlots(instruction.expression)
                             currentState = currentState.updateTask(
                                 index = taskIndex,
-                                task = applySetVariableInstruction(task, instruction),
+                                task = cleanupSlots(
+                                    task = applySetVariableInstruction(task, instruction),
+                                    slotsToRemove = referencedSlots,
+                                ),
+                            )
+                        }
+                        is SetResultInstruction -> {
+                            val referencedSlots = collectReferencedSlots(instruction.expression)
+                            currentState = currentState.updateTask(
+                                index = taskIndex,
+                                task = cleanupSlots(
+                                    task = applyExpressionResultTarget(
+                                        task = task,
+                                        resultTarget = instruction.target,
+                                        expression = instruction.expression,
+                                        nextInstructionPointer = task.instructionPointer + 1,
+                                    ),
+                                    slotsToRemove = referencedSlots,
+                                ),
                             )
                         }
                         is ConditionalJumpInstruction -> {
+                            val referencedSlots = collectReferencedSlots(instruction.condition)
                             val isTrue = evaluateExpression(currentState, task, instruction.condition).asBoolean()
                             currentState = currentState.updateTask(
                                 index = taskIndex,
-                                task = task.copy(
-                                    instructionPointer = if (isTrue) task.instructionPointer + 1 else instruction.falseTarget,
+                                task = cleanupSlots(
+                                    task = task.copy(
+                                        instructionPointer = if (isTrue) task.instructionPointer + 1 else instruction.falseTarget,
+                                    ),
+                                    slotsToRemove = referencedSlots,
                                 ),
                             )
                         }
@@ -150,16 +176,20 @@ class NarrativeInstance(
         instruction: CallFunctionInstruction,
     ): FunctionDispatchRequest? {
         val arguments = evaluateArguments(task, instruction)
+        val referencedSlots = collectReferencedSlots(instruction.arguments)
         val definition = functionRegistry.definition(instruction.functionId)
         return when (val result = definition.startCall(arguments, DefaultNarrativeFunctionContext(currentState, task))) {
             is NarrativeFunctionResult.Returned -> {
                 currentState = currentState.updateTask(
                     index = taskIndex,
-                    task = applyResultTarget(
-                        task = task,
-                        resultTarget = instruction.resultTarget,
-                        value = result.value,
-                        nextInstructionPointer = task.instructionPointer + 1,
+                    task = cleanupSlots(
+                        task = applyResultTarget(
+                            task = task,
+                            resultTarget = instruction.resultTarget,
+                            value = result.value,
+                            nextInstructionPointer = task.instructionPointer + 1,
+                        ),
+                        slotsToRemove = referencedSlots,
                     ),
                 )
                 null
@@ -224,6 +254,7 @@ class NarrativeInstance(
             val status = task.status as NarrativeTaskStatus.SuspendedCall
             val instruction = resolveSuspendedCallInstruction(task)
             val arguments = evaluateArguments(task, instruction)
+            val referencedSlots = collectReferencedSlots(instruction.arguments)
             val definition = functionRegistry.definition(instruction.functionId)
             when (val result = definition.resumeCall(
                 arguments = arguments,
@@ -233,11 +264,14 @@ class NarrativeInstance(
                 is NarrativeFunctionResult.Returned -> {
                     currentState = currentState.updateTask(
                         index = taskIndex,
-                        task = applyResultTarget(
-                            task = task.copy(status = NarrativeTaskStatus.Ready),
-                            resultTarget = status.resultTarget,
-                            value = result.value,
-                            nextInstructionPointer = status.nextInstructionPointer,
+                        task = cleanupSlots(
+                            task = applyResultTarget(
+                                task = task.copy(status = NarrativeTaskStatus.Ready),
+                                resultTarget = status.resultTarget,
+                                value = result.value,
+                                nextInstructionPointer = status.nextInstructionPointer,
+                            ),
+                            slotsToRemove = referencedSlots,
                         ),
                     )
                 }
@@ -274,15 +308,21 @@ class NarrativeInstance(
         instruction: SetVariableInstruction,
     ): NarrativeTaskState {
         val value = evaluateExpression(currentState, task, instruction.expression)
-        val nextSlots = if (instruction.expression is SlotExpression) {
-            task.slots - instruction.expression.slot
+        val nextLocals = if (instruction.expression is SlotExpression) {
+            val slotValue = task.slots[instruction.expression.slot]
+            val locals = if (slotValue is NarrativeSlotValue.VariableReference && isInternalSlotVariable(slotValue.name)) {
+                task.localVariables - slotValue.name
+            } else {
+                task.localVariables
+            }
+            locals + (instruction.name to value)
         } else {
-            task.slots
+            task.localVariables + (instruction.name to value)
         }
         return task.copy(
             instructionPointer = task.instructionPointer + 1,
-            localVariables = task.localVariables + (instruction.name to value),
-            slots = nextSlots,
+            localVariables = nextLocals,
+            slots = if (instruction.expression is SlotExpression) task.slots - instruction.expression.slot else task.slots,
         )
     }
 
@@ -298,10 +338,57 @@ class NarrativeInstance(
                 instructionPointer = nextInstructionPointer,
                 localVariables = task.localVariables + (resultTarget.name to value),
             )
-            is NarrativeResultTarget.Slot -> task.copy(
-                instructionPointer = nextInstructionPointer,
-                slots = task.slots + (resultTarget.slot to NarrativeSlotValue.Value(value)),
+            is NarrativeResultTarget.Slot -> {
+                val slotVariableName = slotVariableName(resultTarget.slot)
+                task.copy(
+                    instructionPointer = nextInstructionPointer,
+                    localVariables = task.localVariables + (slotVariableName to value),
+                    slots = task.slots + (resultTarget.slot to NarrativeSlotValue.VariableReference(slotVariableName)),
+                )
+            }
+        }
+    }
+
+    private fun applyExpressionResultTarget(
+        task: NarrativeTaskState,
+        resultTarget: NarrativeResultTarget,
+        expression: NarrativeExpression,
+        nextInstructionPointer: Int,
+    ): NarrativeTaskState {
+        return when (resultTarget) {
+            is NarrativeResultTarget.Variable -> applyResultTarget(
+                task = task,
+                resultTarget = resultTarget,
+                value = evaluateExpression(currentState, task, expression),
+                nextInstructionPointer = nextInstructionPointer,
             )
+            is NarrativeResultTarget.Slot -> {
+                val slotVariableName = slotVariableName(resultTarget.slot)
+                when (val slotValue = evaluateSlotValue(currentState, task, expression)) {
+                    is NarrativeSlotValue.VariableReference -> task.copy(
+                        instructionPointer = nextInstructionPointer,
+                        slots = task.slots + (resultTarget.slot to slotValue),
+                    )
+                    is NarrativeSlotValue.Value -> task.copy(
+                        instructionPointer = nextInstructionPointer,
+                        localVariables = task.localVariables + (slotVariableName to slotValue.value),
+                        slots = task.slots + (resultTarget.slot to NarrativeSlotValue.VariableReference(slotVariableName)),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun evaluateSlotValue(
+        state: NarrativeState,
+        task: NarrativeTaskState,
+        expression: NarrativeExpression,
+    ): NarrativeSlotValue {
+        return when (expression) {
+            is VariableExpression -> NarrativeSlotValue.VariableReference(expression.name)
+            is SlotExpression -> task.slots[expression.slot]
+                ?: throw IllegalArgumentException("Slot `${expression.slot}` is not defined")
+            else -> NarrativeSlotValue.Value(evaluateExpression(state, task, expression))
         }
     }
 
@@ -337,10 +424,25 @@ class NarrativeInstance(
                         ?: throw IllegalArgumentException("Variable `${slotValue.name}` is not defined")
                 }
             }
+            is UnaryExpression -> {
+                val operand = evaluateExpression(state, task, expression.operand)
+                when (expression.operator) {
+                    NarrativeUnaryOperator.Plus -> NarrativeValue.Int32(operand.asInt())
+                    NarrativeUnaryOperator.Minus -> NarrativeValue.Int32(-operand.asInt())
+                    NarrativeUnaryOperator.Not -> NarrativeValue.Bool(!operand.asBoolean())
+                }
+            }
             is BinaryExpression -> {
                 val left = evaluateExpression(state, task, expression.left)
                 when (expression.operator) {
-                    NarrativeBinaryOperator.Add -> NarrativeValue.Int32(left.asInt() + evaluateExpression(state, task, expression.right).asInt())
+                    NarrativeBinaryOperator.Add -> {
+                        val right = evaluateExpression(state, task, expression.right)
+                        if (left is NarrativeValue.Text || right is NarrativeValue.Text) {
+                            NarrativeValue.Text(left.asString() + right.asString())
+                        } else {
+                            NarrativeValue.Int32(left.asInt() + right.asInt())
+                        }
+                    }
                     NarrativeBinaryOperator.Subtract -> NarrativeValue.Int32(left.asInt() - evaluateExpression(state, task, expression.right).asInt())
                     NarrativeBinaryOperator.LessThan -> NarrativeValue.Bool(left.asInt() < evaluateExpression(state, task, expression.right).asInt())
                     NarrativeBinaryOperator.LessThanOrEquals -> NarrativeValue.Bool(left.asInt() <= evaluateExpression(state, task, expression.right).asInt())
@@ -352,6 +454,49 @@ class NarrativeInstance(
                     NarrativeBinaryOperator.Or -> NarrativeValue.Bool(left.asBoolean() || evaluateExpression(state, task, expression.right).asBoolean())
                 }
             }
+        }
+    }
+
+    private fun cleanupSlots(
+        task: NarrativeTaskState,
+        slotsToRemove: Set<Int>,
+    ): NarrativeTaskState {
+        if (slotsToRemove.isEmpty()) {
+            return task
+        }
+
+        val removedSlotReferences = slotsToRemove.mapNotNull { slot ->
+            (task.slots[slot] as? NarrativeSlotValue.VariableReference)?.name
+        }.toSet()
+        val remainingSlots = task.slots - slotsToRemove
+        val remainingReferences = remainingSlots.values
+            .mapNotNull { (it as? NarrativeSlotValue.VariableReference)?.name }
+            .toSet()
+        val localsToRemove = removedSlotReferences.filter { referencedName ->
+            isInternalSlotVariable(referencedName) && referencedName !in remainingReferences
+        }.toSet()
+
+        return task.copy(
+            slots = remainingSlots,
+            localVariables = if (localsToRemove.isEmpty()) {
+                task.localVariables
+            } else {
+                task.localVariables - localsToRemove
+            },
+        )
+    }
+
+    private fun collectReferencedSlots(expressions: List<NarrativeExpression>): Set<Int> {
+        return expressions.flatMapTo(linkedSetOf()) { collectReferencedSlots(it) }
+    }
+
+    private fun collectReferencedSlots(expression: NarrativeExpression): Set<Int> {
+        return when (expression) {
+            is LiteralExpression -> emptySet()
+            is VariableExpression -> emptySet()
+            is SlotExpression -> setOf(expression.slot)
+            is UnaryExpression -> collectReferencedSlots(expression.operand)
+            is BinaryExpression -> collectReferencedSlots(expression.left) + collectReferencedSlots(expression.right)
         }
     }
 
@@ -378,6 +523,21 @@ class NarrativeInstance(
             else -> throw IllegalArgumentException("Expected int value but got $this")
         }
     }
+
+    private fun NarrativeValue.asString(): String {
+        return when (this) {
+            NarrativeValue.Null -> "null"
+            is NarrativeValue.Bool -> value.toString()
+            is NarrativeValue.Int32 -> value.toString()
+            is NarrativeValue.Text -> value
+            is NarrativeValue.Entity -> id
+            is NarrativeValue.HostObject -> value.toString()
+        }
+    }
+
+    private fun slotVariableName(slot: Int): String = "$SLOT_VARIABLE_PREFIX$slot"
+
+    private fun isInternalSlotVariable(name: String): Boolean = name.startsWith(SLOT_VARIABLE_PREFIX)
 }
 
 private data class FunctionDispatchRequest(

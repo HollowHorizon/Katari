@@ -33,6 +33,10 @@ import com.sunnychung.lib.multiplatform.kotlite.model.IntegerNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LabelNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LongNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
 import com.sunnychung.lib.multiplatform.kotlite.model.PropertyAccessorsNode
@@ -124,6 +128,10 @@ open class CodeGenerator(protected val node: ASTNode, val isPrintDebugInfo: Bool
             is EnumEntryNode -> this.generate()
             is ForNode -> this.generate()
             is ValueParameterDeclarationNode -> this.generate()
+            is NarrativeCheckpointNode -> this.generate()
+            is NarrativeJumpNode -> this.generate()
+            is NarrativeChooseNode -> this.generate()
+            is NarrativeChooseEntryNode -> this.generate()
     }
 
     protected fun AssignmentNode.generate()
@@ -361,5 +369,33 @@ open class CodeGenerator(protected val node: ASTNode, val isPrintDebugInfo: Bool
         } else if (isPrintDebugInfo) {
             append("[: ${type.generate()}]")
         }
+    }
+
+    protected fun NarrativeCheckpointNode.generate() = "checkpoint $label"
+
+    protected fun NarrativeJumpNode.generate() = "jump $label"
+
+    protected fun NarrativeChooseNode.generate() = buildString {
+        append("choose {\n")
+        ++indentLevel
+        entries.forEach {
+            append(indent())
+            append(it.generate())
+            append("\n")
+        }
+        --indentLevel
+        append(indent())
+        append("}")
+    }
+
+    protected fun NarrativeChooseEntryNode.generate() = buildString {
+        append(text.generate())
+        visibleCondition?.let { append(" if ${it.generate()}") }
+        disableCondition?.let {
+            append(" disableIf ${it.generate()}")
+            disabledText?.let { reason -> append(" with ${reason.generate()}") }
+        }
+        append(" -> ")
+        append(action.generate())
     }
 }
