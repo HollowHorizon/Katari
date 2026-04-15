@@ -54,6 +54,18 @@ data class EndInstruction(
     override val position: SourcePosition? = null,
 ) : NarrativeInstruction
 
+data class EnterCallFrameInstruction(
+    val functionId: String,
+    val lexicalParentFrameId: Int? = null,
+    override val position: SourcePosition? = null,
+) : NarrativeInstruction
+
+data class ExitCallFrameInstruction(
+    val returnExpression: NarrativeExpression? = null,
+    val resultTarget: NarrativeResultTarget? = null,
+    override val position: SourcePosition? = null,
+) : NarrativeInstruction
+
 data class RemoveVariablesInstruction(
     val names: List<String>,
     override val position: SourcePosition? = null,
@@ -65,23 +77,36 @@ data class ChoiceOption(
     val target: Int,
 )
 
-sealed interface NarrativeExpression
+sealed interface NarrativeExpression {
+    val position: SourcePosition?
+}
 
-data class LiteralExpression(val value: NarrativeValue) : NarrativeExpression
+data class LiteralExpression(
+    val value: NarrativeValue,
+    override val position: SourcePosition? = null,
+) : NarrativeExpression
 
-data class VariableExpression(val name: String) : NarrativeExpression
+data class VariableExpression(
+    val name: String,
+    override val position: SourcePosition? = null,
+) : NarrativeExpression
 
-data class SlotExpression(val slot: Int) : NarrativeExpression
+data class SlotExpression(
+    val slot: Int,
+    override val position: SourcePosition? = null,
+) : NarrativeExpression
 
 data class UnaryExpression(
     val operator: NarrativeUnaryOperator,
     val operand: NarrativeExpression,
+    override val position: SourcePosition? = null,
 ) : NarrativeExpression
 
 data class BinaryExpression(
     val left: NarrativeExpression,
     val operator: NarrativeBinaryOperator,
     val right: NarrativeExpression,
+    override val position: SourcePosition? = null,
 ) : NarrativeExpression
 
 sealed interface NarrativeResultTarget {
@@ -114,7 +139,6 @@ sealed interface NarrativeValue {
     data class Int32(val value: Int) : NarrativeValue
     data class Float64(val value: Double) : NarrativeValue
     data class Text(val value: String) : NarrativeValue
-    data class Entity(val id: String) : NarrativeValue
     data class HostObject(val typeId: String, val value: Any) : NarrativeValue
 }
 
@@ -128,13 +152,24 @@ data class NarrativeTaskState(
     val id: String,
     val instructionPointer: Int = 0,
     val localVariables: Map<String, NarrativeValue> = emptyMap(),
+    val callFrames: List<NarrativeCallFrameState> = emptyList(),
+    val nextCallFrameId: Int = ROOT_CALL_FRAME_ID + 1,
     val slots: Map<Int, NarrativeSlotValue> = emptyMap(),
     val status: NarrativeTaskStatus = NarrativeTaskStatus.Ready,
 )
 
+data class NarrativeCallFrameState(
+    val id: Int,
+    val functionId: String,
+    val lexicalParentFrameId: Int?,
+    val localVariables: Map<String, NarrativeValue> = emptyMap(),
+)
+
 sealed interface NarrativeSlotValue {
-    data class Value(val value: NarrativeValue) : NarrativeSlotValue
-    data class VariableReference(val name: String) : NarrativeSlotValue
+    data class VariableReference(
+        val name: String,
+        val frameId: Int? = null,
+    ) : NarrativeSlotValue
 }
 
 sealed interface NarrativeTaskStatus {
@@ -169,8 +204,18 @@ data class NarrativeTaskSnapshot(
     val id: String,
     val instructionPointer: Int,
     val localVariables: Map<String, @Polymorphic NarrativeValueSnapshot>,
+    val callFrames: List<NarrativeCallFrameSnapshot>,
+    val nextCallFrameId: Int,
     val slots: Map<Int, NarrativeSlotSnapshot>,
     val status: NarrativeTaskStatusSnapshot,
+)
+
+@Serializable
+data class NarrativeCallFrameSnapshot(
+    val id: Int,
+    val functionId: String,
+    val lexicalParentFrameId: Int? = null,
+    val localVariables: Map<String, @Polymorphic NarrativeValueSnapshot> = emptyMap(),
 )
 
 @Serializable
@@ -205,10 +250,7 @@ sealed interface NarrativeResultTargetSnapshot {
 @Serializable
 sealed interface NarrativeSlotSnapshot {
     @Serializable
-    data class VariableReference(val name: String) : NarrativeSlotSnapshot
-
-    @Serializable
-    data class Value(val value: @Polymorphic NarrativeValueSnapshot) : NarrativeSlotSnapshot
+    data class VariableReference(val name: String, val frameId: Int? = null) : NarrativeSlotSnapshot
 }
 
 interface NarrativeFunctionResponse {
@@ -291,10 +333,6 @@ data class Float64ValueSnapshot(val value: Double) : NarrativeValueSnapshot()
 data class TextValueSnapshot(val value: String) : NarrativeValueSnapshot()
 
 @Serializable
-@SerialName("entity")
-data class EntityValueSnapshot(val id: String) : NarrativeValueSnapshot()
-
-@Serializable
 @SerialName("choice_option")
 data class ChoiceOptionValueSnapshot(
     val id: String,
@@ -346,7 +384,6 @@ data class NarrativeValueCodecRegistry(
                 subclass(Int32ValueSnapshot::class, Int32ValueSnapshot.serializer())
                 subclass(Float64ValueSnapshot::class, Float64ValueSnapshot.serializer())
                 subclass(TextValueSnapshot::class, TextValueSnapshot.serializer())
-                subclass(EntityValueSnapshot::class, EntityValueSnapshot.serializer())
                 codecsByTypeId.values.forEach {
                     @Suppress("UNCHECKED_CAST")
                     subclass(
@@ -358,3 +395,6 @@ data class NarrativeValueCodecRegistry(
         }
     }
 }
+
+internal const val ROOT_CALL_FRAME_ID: Int = 0
+internal const val ROOT_CALL_FRAME_FUNCTION_ID: String = "__main__"

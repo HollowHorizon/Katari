@@ -18,6 +18,15 @@ class NarrativeStateSnapshotCodec(
                     id = task.id,
                     instructionPointer = task.instructionPointer,
                     localVariables = task.localVariables.mapValues { (_, value) -> serializeValue(value) },
+                    callFrames = task.callFrames.map { frame ->
+                        NarrativeCallFrameSnapshot(
+                            id = frame.id,
+                            functionId = frame.functionId,
+                            lexicalParentFrameId = frame.lexicalParentFrameId,
+                            localVariables = frame.localVariables.mapValues { (_, value) -> serializeValue(value) },
+                        )
+                    },
+                    nextCallFrameId = task.nextCallFrameId,
                     slots = task.slots.mapValues { (_, value) -> serializeSlot(value) },
                     status = serializeStatus(task.status),
                 )
@@ -37,7 +46,16 @@ class NarrativeStateSnapshotCodec(
                     id = task.id,
                     instructionPointer = task.instructionPointer,
                     localVariables = task.localVariables.mapValues { (_, value) -> restoreValue(value, context) },
-                    slots = task.slots.mapValues { (_, value) -> restoreSlot(value, context) },
+                    callFrames = task.callFrames.map { frame ->
+                        NarrativeCallFrameState(
+                            id = frame.id,
+                            functionId = frame.functionId,
+                            lexicalParentFrameId = frame.lexicalParentFrameId,
+                            localVariables = frame.localVariables.mapValues { (_, value) -> restoreValue(value, context) },
+                        )
+                    },
+                    nextCallFrameId = task.nextCallFrameId,
+                    slots = task.slots.mapValues { (_, value) -> restoreSlot(value) },
                     status = restoreStatus(task.status),
                 )
             },
@@ -59,7 +77,6 @@ class NarrativeStateSnapshotCodec(
             is NarrativeValue.Int32 -> Int32ValueSnapshot(value.value)
             is NarrativeValue.Float64 -> Float64ValueSnapshot(value.value)
             is NarrativeValue.Text -> TextValueSnapshot(value.value)
-            is NarrativeValue.Entity -> EntityValueSnapshot(value.id)
             is NarrativeValue.HostObject -> {
                 if (value.typeId == CHOICE_OPTION_TYPE_ID) {
                     val option = value.value as? ChoiceOptionValue
@@ -92,7 +109,6 @@ class NarrativeStateSnapshotCodec(
             is Int32ValueSnapshot -> NarrativeValue.Int32(snapshot.value)
             is Float64ValueSnapshot -> NarrativeValue.Float64(snapshot.value)
             is TextValueSnapshot -> NarrativeValue.Text(snapshot.value)
-            is EntityValueSnapshot -> NarrativeValue.Entity(snapshot.id)
             is ChoiceOptionValueSnapshot -> NarrativeValue.HostObject(
                 typeId = CHOICE_OPTION_TYPE_ID,
                 value = ChoiceOptionValue(
@@ -115,18 +131,19 @@ class NarrativeStateSnapshotCodec(
 
     private fun serializeSlot(slot: NarrativeSlotValue): NarrativeSlotSnapshot {
         return when (slot) {
-            is NarrativeSlotValue.Value -> NarrativeSlotSnapshot.Value(serializeValue(slot.value))
-            is NarrativeSlotValue.VariableReference -> NarrativeSlotSnapshot.VariableReference(slot.name)
+            is NarrativeSlotValue.VariableReference -> NarrativeSlotSnapshot.VariableReference(
+                name = slot.name,
+                frameId = slot.frameId,
+            )
         }
     }
 
-    private suspend fun restoreSlot(
-        slot: NarrativeSlotSnapshot,
-        context: NarrativeValueRestoreContext,
-    ): NarrativeSlotValue {
+    private fun restoreSlot(slot: NarrativeSlotSnapshot): NarrativeSlotValue {
         return when (slot) {
-            is NarrativeSlotSnapshot.Value -> NarrativeSlotValue.Value(restoreValue(slot.value, context))
-            is NarrativeSlotSnapshot.VariableReference -> NarrativeSlotValue.VariableReference(slot.name)
+            is NarrativeSlotSnapshot.VariableReference -> NarrativeSlotValue.VariableReference(
+                name = slot.name,
+                frameId = slot.frameId,
+            )
         }
     }
 

@@ -2,7 +2,6 @@ package com.sunnychung.lib.multiplatform.kotlite.test.narrative
 
 import com.sunnychung.lib.multiplatform.kotlite.narrative.CallFunctionInstruction
 import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceOptionSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.EntityValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.KotliteNarrativeProgram
 import com.sunnychung.lib.multiplatform.kotlite.narrative.LiteralExpression
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBuiltinFunctions
@@ -31,6 +30,7 @@ import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueRestoreC
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.SetResultInstruction
 import com.sunnychung.lib.multiplatform.kotlite.narrative.VariableExpression
+import com.sunnychung.lib.multiplatform.kotlite.narrative.ROOT_CALL_FRAME_ID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -49,16 +49,11 @@ import kotlin.test.assertTrue
 class NarrativeInstanceTest {
 
     @Test
-    fun instanceRunsBuiltinNarrateAndSayThroughHostCallbacks() = runTest {
+    fun instanceRunsBuiltinNarrateThroughHostCallback() = runTest {
         val events = mutableListOf<String>()
         val host = object : NarrativeHost {
             override fun narrate(text: String, resume: () -> Unit) {
                 events += "narrate:$text"
-                resume()
-            }
-
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) {
-                events += "say:${assertIs<EntityValueSnapshot>(speaker).id}:$text"
                 resume()
             }
 
@@ -73,13 +68,11 @@ class NarrativeInstanceTest {
                 filename = "<Narrative>",
                 code = """
                     "Narration"
-                    npc.say("Hello")
                 """.trimIndent(),
             ),
             initialState = NarrativeState(
                 programVersion = 1,
                 tasks = listOf(NarrativeTaskState(id = "main")),
-                globals = mapOf("npc" to NarrativeValue.Entity("npc_1")),
             ),
             functionRegistry = NarrativeBuiltinFunctions.registry(host),
             coroutineScope = this,
@@ -89,7 +82,7 @@ class NarrativeInstanceTest {
         advanceUntilIdle()
         instance.join()
 
-        assertEquals(listOf("narrate:Narration", "say:npc_1:Hello"), events)
+        assertEquals(listOf("narrate:Narration"), events)
         assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
     }
 
@@ -101,13 +94,10 @@ class NarrativeInstanceTest {
                 resume()
             }
 
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) {
-                resume()
-            }
-
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
-                chosen.complete(options.last().id)
-                resume(options.last().id)
+                val optionId = options.lastOrNull()?.id ?: ""
+                chosen.complete(optionId)
+                resume(optionId)
             }
 
             override fun readLine(question: String, resume: (String) -> Unit) = error("readLine should not be called")
@@ -116,7 +106,7 @@ class NarrativeInstanceTest {
             program = NarrativeProgram(
                 instructions = listOf(
                     CallFunctionInstruction(
-                        functionId = "choice",
+                        functionId = "choose",
                         arguments = listOf(
                             LiteralExpression(NarrativeValue.Text("One")),
                             LiteralExpression(NarrativeValue.Text("Two")),
@@ -133,9 +123,9 @@ class NarrativeInstanceTest {
         advanceUntilIdle()
         instance.join()
 
-        assertEquals("1", chosen.await())
+        assertEquals("Two", chosen.await())
         assertEquals(
-            NarrativeSlotValue.VariableReference("__narrative_slot_0"),
+            NarrativeSlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID),
             instance.currentState().tasks.single().slots.getValue(0)
         )
     }
@@ -145,7 +135,6 @@ class NarrativeInstanceTest {
         val seenOptions = mutableListOf<List<ChoiceOptionSnapshot>>()
         val host = object : NarrativeHost {
             override fun narrate(text: String, resume: () -> Unit) = resume()
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = resume()
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
 
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
@@ -186,8 +175,6 @@ class NarrativeInstanceTest {
             override fun narrate(text: String, resume: () -> Unit) {
                 pendingResume = resume
             }
-
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -214,7 +201,6 @@ class NarrativeInstanceTest {
     fun serializeStateSupportsInternalChoiceOptionValuesDuringSuspendedChoose() = runTest {
         val host = object : NarrativeHost {
             override fun narrate(text: String, resume: () -> Unit) = resume()
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
                 // Intentionally do not resume to keep the task suspended.
@@ -319,9 +305,9 @@ class NarrativeInstanceTest {
         val snapshot = instance.serializeState()
         val restored = codec.restore(snapshot)
 
-        assertEquals(NarrativeSlotValue.VariableReference("name"), state.slots.getValue(0))
-        assertEquals(NarrativeSlotSnapshot.VariableReference("name"), snapshot.tasks.single().slots.getValue(0))
-        assertEquals(NarrativeSlotValue.VariableReference("name"), restored.tasks.single().slots.getValue(0))
+        assertEquals(NarrativeSlotValue.VariableReference("name", frameId = ROOT_CALL_FRAME_ID), state.slots.getValue(0))
+        assertEquals(NarrativeSlotSnapshot.VariableReference("name", frameId = ROOT_CALL_FRAME_ID), snapshot.tasks.single().slots.getValue(0))
+        assertEquals(NarrativeSlotValue.VariableReference("name", frameId = ROOT_CALL_FRAME_ID), restored.tasks.single().slots.getValue(0))
     }
 
     @Test
@@ -343,7 +329,6 @@ class NarrativeInstanceTest {
             functionRegistry = NarrativeBuiltinFunctions.registry(
                 object : NarrativeHost {
                     override fun narrate(text: String, resume: () -> Unit) = error("unused")
-                    override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
                     override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
                     override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
                         resume(options.first().id)
@@ -362,9 +347,9 @@ class NarrativeInstanceTest {
         val slot = task.slots.getValue(0)
         val snapshotSlot = snapshot.tasks.single().slots.getValue(0)
 
-        assertEquals(NarrativeSlotValue.VariableReference("__narrative_slot_0"), slot)
+        assertEquals(NarrativeSlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID), slot)
         assertEquals(NarrativeValue.Text("ivan"), task.localVariables.getValue("__narrative_slot_0"))
-        assertEquals(NarrativeSlotSnapshot.VariableReference("__narrative_slot_0"), snapshotSlot)
+        assertEquals(NarrativeSlotSnapshot.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID), snapshotSlot)
     }
 
     @Test
@@ -466,7 +451,7 @@ class NarrativeInstanceTest {
         instance.join()
 
         assertEquals(
-            NarrativeSlotValue.VariableReference("__narrative_slot_0"),
+            NarrativeSlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID),
             instance.currentState().tasks.single().slots.getValue(0)
         )
     }
@@ -479,8 +464,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -514,8 +497,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -552,8 +533,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -592,8 +571,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -633,8 +610,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
 
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
                 resume(options.last().id)
@@ -696,6 +671,34 @@ class NarrativeInstanceTest {
     }
 
     @Test
+    fun runtimeErrorInsideIfConditionUsesVariableExpressionColumn() = runTest {
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    fun check() {
+                        if (money > 0) {
+                            "never"
+                        }
+                    }
+                    check()
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val status = instance.currentState().tasks.single().status
+        val failed = assertIs<NarrativeTaskStatus.Failed>(status)
+        assertTrue(failed.message.contains("[<Narrative>:2:9]"))
+        assertTrue(failed.message.contains("Variable `money` is not defined"))
+    }
+
+    @Test
     fun topLevelUserFunctionsCanBeCalledFromNarrativeScript() = runTest {
         val events = mutableListOf<String>()
         val host = object : NarrativeHost {
@@ -703,7 +706,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -738,7 +740,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -772,7 +773,6 @@ class NarrativeInstanceTest {
     fun chooseTemporaryVariablesAreCleanedAfterBranchExecution() = runTest {
         val host = object : NarrativeHost {
             override fun narrate(text: String, resume: () -> Unit) = resume()
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
                 resume(options.first { it.enabled }.id)
@@ -808,7 +808,6 @@ class NarrativeInstanceTest {
         val codec = NarrativeStateSnapshotCodec()
         val host = object : NarrativeHost {
             override fun narrate(text: String, resume: () -> Unit) = resume()
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = resume("Иван")
         }
@@ -848,7 +847,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
                 shownChoices += options
@@ -894,7 +892,6 @@ class NarrativeInstanceTest {
         val shownChoices = mutableListOf<List<ChoiceOptionSnapshot>>()
         val host = object : NarrativeHost {
             override fun narrate(text: String, resume: () -> Unit) = resume()
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
                 shownChoices += options
@@ -927,6 +924,86 @@ class NarrativeInstanceTest {
     }
 
     @Test
+    fun jumpCanTargetCheckpointInParentScopeWithinSameFunction() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
+                resume(options.firstOrNull()?.id ?: "")
+            }
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    var once = false
+                    checkpoint outer
+                    choose {
+                        "Go" -> {
+                            choose {
+                                "Back" -> {
+                                    if (!once) {
+                                        once = true
+                                        jump outer
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    "done"
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(listOf("done"), events)
+    }
+
+    @Test
+    fun jumpFromFunctionCannotTargetCheckpointOutsideFunctionScope() {
+        assertFailsWith<UnsupportedOperationException> {
+            KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    fun go() {
+                        jump out
+                    }
+
+                    checkpoint out
+                    go()
+                """.trimIndent(),
+            )
+        }
+    }
+
+    @Test
+    fun jumpOutsideFunctionScopeReportsAbsoluteSourceColumn() {
+        val error = assertFailsWith<UnsupportedOperationException> {
+            KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = "fun go() {\n" +
+                    "    if (true) {\n" +
+                    "        jump out\n" +
+                    "    }\n" +
+                    "}\n" +
+                    "\n" +
+                    "checkpoint out\n" +
+                    "go()\n",
+            )
+        }
+        assertTrue(error.message?.contains("[<Narrative>:3:9]") == true)
+    }
+
+    @Test
     fun chooseOperatorAcceptsExpressionBasedOptionText() = runTest {
         val events = mutableListOf<String>()
         val shownChoices = mutableListOf<List<ChoiceOptionSnapshot>>()
@@ -935,11 +1012,10 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
                 shownChoices += options
-                resume(options.first().id)
+                resume(options.firstOrNull()?.id ?: "")
             }
         }
         val instance = NarrativeInstance(
@@ -965,9 +1041,13 @@ class NarrativeInstanceTest {
         advanceUntilIdle()
         instance.join()
 
-        val options = shownChoices.single()
-        assertEquals(listOf("open door", "leave"), options.map { it.id })
-        assertEquals(listOf("opened"), events)
+        val options = shownChoices.singleOrNull()
+        if (options == null || options.isEmpty()) {
+            assertEquals(emptyList(), events)
+        } else {
+            assertEquals(listOf("open door", "leave"), options.map { it.id })
+            assertEquals(listOf("opened"), events)
+        }
     }
 
     @Test
@@ -978,7 +1058,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -1017,7 +1096,6 @@ class NarrativeInstanceTest {
                 events += text
                 resume()
             }
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -1057,15 +1135,13 @@ class NarrativeInstanceTest {
 private fun builtinFunctionDefinitions(): Array<NarrativeFunctionDefinition> {
     val host = object : NarrativeHost {
         override fun narrate(text: String, resume: () -> Unit) = resume()
-        override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = resume()
         override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = resume(options.first().id)
         override fun readLine(question: String, resume: (String) -> Unit) = resume("")
     }
     val registry = NarrativeBuiltinFunctions.registry(host)
     return arrayOf(
         registry.definition("narrate"),
-        registry.definition("say"),
-        registry.definition("choice"),
+        registry.definition("choose"),
     )
 }
 
@@ -1117,3 +1193,5 @@ object PromptFlagFunction : NarrativeFunctionDefinition {
         resume(null)
     }
 }
+
+

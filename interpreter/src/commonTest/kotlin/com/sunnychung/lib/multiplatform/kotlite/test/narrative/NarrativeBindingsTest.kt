@@ -149,7 +149,6 @@ class NarrativeBindingsTest {
                 events += text
                 resume()
             }
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -189,7 +188,6 @@ class NarrativeBindingsTest {
                 events += text
                 resume()
             }
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -272,7 +270,6 @@ class NarrativeBindingsTest {
                 events += text
                 resume()
             }
-            override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = error("unused")
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -330,3 +327,5 @@ data class BindingNarrativeObject(val name: String)
 data class BindingActor(var ready: Boolean = false)
 
 data class PromptFlagResponse(val enabled: Boolean) : NarrativeFunctionResponse
+
+

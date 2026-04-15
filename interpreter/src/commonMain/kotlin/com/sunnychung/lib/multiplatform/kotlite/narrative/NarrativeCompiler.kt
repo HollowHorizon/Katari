@@ -22,6 +22,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
 import com.sunnychung.lib.multiplatform.kotlite.model.PropertyDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ReturnNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
+import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringFieldIdentifierNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
@@ -33,26 +34,19 @@ class NarrativeCompiler {
 
     private var temporarySlotCounter: Int = 0
     private val loopContexts = ArrayDeque<LoopContext>()
-    private val checkpoints = mutableMapOf<String, Int>()
-    private val unresolvedJumps = mutableListOf<UnresolvedJump>()
+    private val checkpointScopes = ArrayDeque<CheckpointScope>()
     private val userFunctions = mutableMapOf<String, FunctionDeclarationNode>()
-    private val userFunctionCompilationStack = ArrayDeque<String>()
-    private val variableAliasScopes = ArrayDeque<Map<String, String>>()
 
     fun compile(script: ScriptNode): NarrativeProgram {
         temporarySlotCounter = 0
         loopContexts.clear()
-        checkpoints.clear()
-        unresolvedJumps.clear()
+        checkpointScopes.clear()
         userFunctions.clear()
-        userFunctionCompilationStack.clear()
-        variableAliasScopes.clear()
 
         collectTopLevelUserFunctions(script)
 
         val instructions = mutableListOf<NarrativeInstruction>()
-        compileStatements(script.nodes.filterNot { it is FunctionDeclarationNode }, instructions)
-        resolveCheckpointJumps(instructions)
+        compileStatementsInScope(script.nodes.filterNot { it is FunctionDeclarationNode }, instructions, isFunctionBoundary = true)
         instructions += EndInstruction(position = script.position)
         return NarrativeProgram(instructions = instructions)
     }
@@ -61,10 +55,47 @@ class NarrativeCompiler {
         statements.forEach { compileStatement(it, instructions) }
     }
 
+    private fun compileStatementsInScope(
+        statements: List<ASTNode>,
+        instructions: MutableList<NarrativeInstruction>,
+        isFunctionBoundary: Boolean = false,
+    ) {
+        checkpointScopes.addLast(CheckpointScope(isFunctionBoundary = isFunctionBoundary))
+        try {
+            compileStatements(statements, instructions)
+            val scope = checkpointScopes.last()
+            val unresolvedToBubble = mutableListOf<UnresolvedJump>()
+            scope.unresolved.forEach { jump ->
+                val target = scope.checkpoints[jump.label]
+                if (target != null) {
+                    instructions[jump.instructionIndex] = JumpInstruction(
+                        target = target,
+                        position = instructions[jump.instructionIndex].position,
+                    )
+                } else {
+                    unresolvedToBubble += jump
+                }
+            }
+            if (unresolvedToBubble.isNotEmpty()) {
+                val parentIndex = checkpointScopes.lastIndex - 1
+                if (parentIndex >= 0 && !scope.isFunctionBoundary) {
+                    checkpointScopes[parentIndex].unresolved += unresolvedToBubble
+                } else {
+                    val missing = unresolvedToBubble.first()
+                    throw UnsupportedOperationException(
+                        "${missing.position} Narrative jump target `${missing.label}` is not defined in this function scope"
+                    )
+                }
+            }
+        } finally {
+            checkpointScopes.removeLast()
+        }
+    }
+
     private fun compileStatement(statement: ASTNode, instructions: MutableList<NarrativeInstruction>) {
         when (statement) {
-            is ScriptNode -> compileStatements(statement.nodes, instructions)
-            is BlockNode -> compileStatements(statement.statements, instructions)
+            is ScriptNode -> compileStatementsInScope(statement.nodes, instructions)
+            is BlockNode -> compileStatementsInScope(statement.statements, instructions)
             is IfNode -> compileIf(statement, instructions)
             is WhileNode -> compileWhile(statement, instructions)
             is PropertyDeclarationNode -> compilePropertyDeclaration(statement, instructions)
@@ -153,18 +184,40 @@ class NarrativeCompiler {
         node: NarrativeCheckpointNode,
         instructions: MutableList<NarrativeInstruction>,
     ) {
+        val currentScope = checkpointScopes.lastOrNull()
+            ?: throw IllegalStateException("Checkpoint scope is not initialized")
         val label = node.label
-        require(label !in checkpoints) { "Checkpoint `$label` is declared more than once" }
-        checkpoints[label] = instructions.size
+        require(label !in currentScope.checkpoints) { "Checkpoint `$label` is declared more than once in this scope" }
+        currentScope.checkpoints[label] = instructions.size
     }
 
     private fun compileJump(
         node: NarrativeJumpNode,
         instructions: MutableList<NarrativeInstruction>,
     ) {
+        val currentScope = checkpointScopes.lastOrNull()
+            ?: throw IllegalStateException("Checkpoint scope is not initialized")
         val label = node.label
-        unresolvedJumps += UnresolvedJump(label = label, instructionIndex = instructions.size)
-        instructions += JumpInstruction(target = -1, position = node.position)
+        val target = findVisibleCheckpoint(label)
+        if (target != null) {
+            instructions += JumpInstruction(target = target, position = node.position)
+        } else {
+            currentScope.unresolved += UnresolvedJump(label = label, instructionIndex = instructions.size, node.position)
+            instructions += JumpInstruction(target = -1, position = node.position)
+        }
+    }
+
+    private fun findVisibleCheckpoint(label: String): Int? {
+        checkpointScopes.toList().asReversed().forEach { scope ->
+            val target = scope.checkpoints[label]
+            if (target != null) {
+                return target
+            }
+            if (scope.isFunctionBoundary) {
+                return null
+            }
+        }
+        return null
     }
 
     private fun compileChoose(
@@ -193,9 +246,10 @@ class NarrativeCompiler {
         compiledEntries.forEachIndexed { index, compiledEntry ->
             val entry = compiledEntry.entry
             val condition = BinaryExpression(
-                left = VariableExpression(choiceVariable),
+                left = VariableExpression(choiceVariable, position = entry.position),
                 operator = NarrativeBinaryOperator.Equals,
                 right = compiledEntry.selectedIdExpression,
+                position = entry.position,
             )
             val conditionalIndex = instructions.size
             instructions += ConditionalJumpInstruction(
@@ -243,6 +297,7 @@ class NarrativeCompiler {
             UnaryExpression(
                 operator = NarrativeUnaryOperator.Not,
                 operand = compileExpression(it, instructions),
+                position = entry.position,
             )
         } ?: LiteralExpression(NarrativeValue.Bool(true))
         val disabledTextExpression = entry.disabledText?.let { compileExpression(it, instructions) }
@@ -259,17 +314,6 @@ class NarrativeCompiler {
             position = entry.position,
         )
         return SlotExpression(slot)
-    }
-
-    private fun resolveCheckpointJumps(instructions: MutableList<NarrativeInstruction>) {
-        unresolvedJumps.forEach { jump ->
-            val target = checkpoints[jump.label]
-                ?: throw UnsupportedOperationException("Narrative jump target `${jump.label}` is not defined")
-            instructions[jump.instructionIndex] = JumpInstruction(
-                target = target,
-                position = instructions[jump.instructionIndex].position,
-            )
-        }
     }
 
     private fun compilePropertyDeclaration(node: PropertyDeclarationNode, instructions: MutableList<NarrativeInstruction>) {
@@ -342,6 +386,7 @@ class NarrativeCompiler {
                         left = VariableExpression(targetName),
                         operator = operator,
                         right = compileExpression(node.value, instructions),
+                        position = node.position,
                     ),
                     position = node.position,
                 )
@@ -532,9 +577,6 @@ class NarrativeCompiler {
         resultTarget: NarrativeResultTarget?,
     ) {
         val functionName = declaration.name
-        require(functionName !in userFunctionCompilationStack) {
-            "${callNode.position} Recursive narrative user function calls are not supported (`${functionName}`)"
-        }
         require(callNode.arguments.size == declaration.valueParameters.size) {
             "${callNode.position} Narrative user function `${functionName}` expects ${declaration.valueParameters.size} arguments but got ${callNode.arguments.size}"
         }
@@ -544,46 +586,48 @@ class NarrativeCompiler {
 
         val parameterNames = declaration.valueParameters.map { it.name }
         val argumentExpressions = callNode.arguments.map { compileExpression(it.value, instructions) }
-        val localNames = collectDeclaredVariables(body.statements)
-        val aliasMap = mutableMapOf<String, String>()
-
+        instructions += EnterCallFrameInstruction(
+            functionId = functionName,
+            lexicalParentFrameId = null,
+            position = callNode.position,
+        )
         parameterNames.forEachIndexed { index, parameterName ->
-            aliasMap[parameterName] = "__narrative_fn_${functionName}_${nextTemporarySlot()}_arg_${index}"
-        }
-        localNames.forEach { localName ->
-            aliasMap.putIfAbsent(localName, "__narrative_fn_${functionName}_${nextTemporarySlot()}_local_${localName}")
-        }
-
-        parameterNames.forEachIndexed { index, parameterName ->
-            val alias = aliasMap.getValue(parameterName)
             instructions += SetVariableInstruction(
-                name = alias,
+                name = parameterName,
                 expression = argumentExpressions[index],
                 position = callNode.position,
             )
         }
-
-        variableAliasScopes.addLast(aliasMap)
-        userFunctionCompilationStack.addLast(functionName)
-        try {
-            if (resultTarget == null) {
-                compileUserFunctionBodyAsStatements(body, instructions, functionName)
-            } else {
-                compileUserFunctionBodyAsExpression(body, instructions, resultTarget, functionName)
+        if (resultTarget == null) {
+            compileStatementsInScope(body.statements, instructions, isFunctionBoundary = true)
+            validateUserFunctionBodyAsStatements(body, functionName)
+            instructions += ExitCallFrameInstruction(
+                returnExpression = null,
+                resultTarget = null,
+                position = callNode.position,
+            )
+        } else {
+            val returnName = "__narrative_return_${nextTemporarySlot()}"
+            compileStatementsInScope(body.statements.dropLast(1), instructions, isFunctionBoundary = true)
+            validateUserFunctionBodyAsExpression(body, functionName)
+            val last = body.statements.last()
+            when (last) {
+                is ReturnNode -> {
+                    val returnValue = last.value ?: NullNode
+                    compileExpressionIntoTarget(returnValue, NarrativeResultTarget.Variable(returnName), instructions)
+                }
+                else -> compileExpressionIntoTarget(last, NarrativeResultTarget.Variable(returnName), instructions)
             }
-        } finally {
-            userFunctionCompilationStack.removeLast()
-            variableAliasScopes.removeLast()
-            instructions += RemoveVariablesInstruction(
-                names = aliasMap.values.toList(),
+            instructions += ExitCallFrameInstruction(
+                returnExpression = VariableExpression(returnName, position = last.position),
+                resultTarget = resultTarget,
                 position = callNode.position,
             )
         }
     }
 
-    private fun compileUserFunctionBodyAsStatements(
+    private fun validateUserFunctionBodyAsStatements(
         body: BlockNode,
-        instructions: MutableList<NarrativeInstruction>,
         functionName: String,
     ) {
         val statements = body.statements
@@ -595,14 +639,11 @@ class NarrativeCompiler {
                 }
                 return
             }
-            compileStatement(statement, instructions)
         }
     }
 
-    private fun compileUserFunctionBodyAsExpression(
+    private fun validateUserFunctionBodyAsExpression(
         body: BlockNode,
-        instructions: MutableList<NarrativeInstruction>,
-        resultTarget: NarrativeResultTarget,
         functionName: String,
     ) {
         val statements = body.statements
@@ -614,43 +655,10 @@ class NarrativeCompiler {
             require(statement !is ReturnNode) {
                 "${statement.position} Narrative user function `${functionName}` only supports trailing return"
             }
-            compileStatement(statement, instructions)
         }
-
-        val last = statements.last()
-        when (last) {
-            is ReturnNode -> {
-                val returnValue = last.value ?: NullNode
-                compileExpressionIntoTarget(returnValue, resultTarget, instructions)
-            }
-            else -> compileExpressionIntoTarget(last, resultTarget, instructions)
-        }
-    }
-
-    private fun collectDeclaredVariables(statements: List<ASTNode>): Set<String> {
-        val names = linkedSetOf<String>()
-        statements.forEach { statement ->
-            when (statement) {
-                is PropertyDeclarationNode -> names += statement.name
-                is BlockNode -> names += collectDeclaredVariables(statement.statements)
-                is IfNode -> {
-                    statement.trueBlock?.let { names += collectDeclaredVariables(it.statements) }
-                    statement.falseBlock?.let { names += collectDeclaredVariables(it.statements) }
-                }
-                is WhileNode -> statement.body?.let { names += collectDeclaredVariables(it.statements) }
-                else -> Unit
-            }
-        }
-        return names
     }
 
     private fun resolveVariableName(name: String): String {
-        variableAliasScopes.toList().asReversed().forEach { scope ->
-            val alias = scope[name]
-            if (alias != null) {
-                return alias
-            }
-        }
         return name
     }
 
@@ -671,14 +679,14 @@ class NarrativeCompiler {
 
     private fun compileExpression(expression: ASTNode, instructions: MutableList<NarrativeInstruction>): NarrativeExpression {
         return when (expression) {
-            is BooleanNode -> LiteralExpression(NarrativeValue.Bool(expression.value))
-            is IntegerNode -> LiteralExpression(NarrativeValue.Int32(expression.value))
-            is DoubleNode -> LiteralExpression(NarrativeValue.Float64(expression.value))
-            NullNode -> LiteralExpression(NarrativeValue.Null)
-            is StringLiteralNode -> LiteralExpression(NarrativeValue.Text(expression.content))
+            is BooleanNode -> LiteralExpression(NarrativeValue.Bool(expression.value), position = expression.position)
+            is IntegerNode -> LiteralExpression(NarrativeValue.Int32(expression.value), position = expression.position)
+            is DoubleNode -> LiteralExpression(NarrativeValue.Float64(expression.value), position = expression.position)
+            NullNode -> LiteralExpression(NarrativeValue.Null, position = expression.position)
+            is StringLiteralNode -> LiteralExpression(NarrativeValue.Text(expression.content), position = expression.position)
             is StringNode -> compileStringExpression(expression, instructions)
-            is StringFieldIdentifierNode -> VariableExpression(resolveVariableName(expression.variableName))
-            is VariableReferenceNode -> VariableExpression(resolveVariableName(expression.variableName))
+            is StringFieldIdentifierNode -> VariableExpression(resolveVariableName(expression.variableName), position = expression.position)
+            is VariableReferenceNode -> VariableExpression(resolveVariableName(expression.variableName), position = expression.position)
             is IfNode -> compileIfExpression(expression, instructions)
             is FunctionCallNode -> {
                 val functionName = (expression.function as? VariableReferenceNode)?.variableName
@@ -692,7 +700,7 @@ class NarrativeCompiler {
                             instructions = instructions,
                             resultTarget = NarrativeResultTarget.Slot(slot),
                         )
-                        return SlotExpression(slot)
+                        return SlotExpression(slot, position = expression.position)
                     }
                 }
                 val slot = nextTemporarySlot()
@@ -701,7 +709,7 @@ class NarrativeCompiler {
                     instructions = instructions,
                     resultTarget = NarrativeResultTarget.Slot(slot),
                 )
-                SlotExpression(slot)
+                SlotExpression(slot, position = expression.position)
             }
             is InfixFunctionCallNode -> {
                 when (expression.functionName) {
@@ -719,7 +727,7 @@ class NarrativeCompiler {
                             resultTarget = NarrativeResultTarget.Slot(slot),
                             position = expression.position,
                         )
-                        SlotExpression(slot)
+                        SlotExpression(slot, position = expression.position)
                     }
                 }
             }
@@ -740,6 +748,7 @@ class NarrativeCompiler {
                         UnaryExpression(
                             operator = operator,
                             operand = compileExpression(operand, instructions),
+                            position = expression.position,
                         )
                     }
                 }
@@ -762,6 +771,7 @@ class NarrativeCompiler {
                     left = compileExpression(expression.node1, instructions),
                     operator = operator,
                     right = compileExpression(expression.node2, instructions),
+                    position = expression.position,
                 )
             }
             else -> throw UnsupportedOperationException("${expression.position} Narrative expression `${expression::class.simpleName}` is not supported")
@@ -782,6 +792,7 @@ class NarrativeCompiler {
                     left = acc,
                     operator = NarrativeBinaryOperator.Add,
                     right = part,
+                    position = node.position,
                 )
             }
     }
@@ -805,6 +816,7 @@ class NarrativeCompiler {
             left = VariableExpression(variableName),
             operator = if (delta > 0) NarrativeBinaryOperator.Add else NarrativeBinaryOperator.Subtract,
             right = LiteralExpression(NarrativeValue.Int32(kotlin.math.abs(delta))),
+            position = node.position,
         )
         return when (node.operator) {
             "pre++", "pre--" -> {
@@ -813,7 +825,7 @@ class NarrativeCompiler {
                     expression = updateExpression,
                     position = node.position,
                 )
-                VariableExpression(variableName)
+                VariableExpression(variableName, position = node.position)
             }
             "post++", "post--" -> {
                 val slot = nextTemporarySlot()
@@ -823,6 +835,7 @@ class NarrativeCompiler {
                         left = VariableExpression(variableName),
                         operator = NarrativeBinaryOperator.Add,
                         right = LiteralExpression(NarrativeValue.Int32(0)),
+                        position = node.position,
                     ),
                     position = node.position,
                 )
@@ -831,7 +844,7 @@ class NarrativeCompiler {
                     expression = updateExpression,
                     position = node.position,
                 )
-                SlotExpression(slot)
+                SlotExpression(slot, position = node.position)
             }
             else -> throw UnsupportedOperationException("Unary operator `${node.operator}` is not supported")
         }
@@ -849,9 +862,16 @@ private data class LoopContext(
     val breakJumpIndices: MutableList<Int> = mutableListOf(),
 )
 
+private data class CheckpointScope(
+    val checkpoints: MutableMap<String, Int> = mutableMapOf(),
+    val unresolved: MutableList<UnresolvedJump> = mutableListOf(),
+    val isFunctionBoundary: Boolean = false,
+)
+
 private data class UnresolvedJump(
     val label: String,
     val instructionIndex: Int,
+    val position: SourcePosition,
 )
 
 private data class CompiledChooseEntry(

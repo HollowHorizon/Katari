@@ -2,14 +2,12 @@ package com.sunnychung.lib.multiplatform.kotlite.narrative
 
 interface NarrativeHost {
     fun narrate(text: String, resume: () -> Unit)
-    fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit)
     fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit)
     fun readLine(question: String, resume: (String) -> Unit)
 }
 
 data object NarrativeNoOpHost : NarrativeHost {
     override fun narrate(text: String, resume: () -> Unit) = resume()
-    override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) = resume()
     override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) {
         resume(options.firstOrNull { it.enabled }?.id ?: "")
     }
@@ -254,14 +252,6 @@ internal data class ChoiceOptionValue(
     val disabledText: String?,
 )
 
-private fun NarrativeValue.asText(): String {
-    return when (this) {
-        is NarrativeValue.Text -> value
-        is NarrativeValue.Entity -> id
-        else -> throw IllegalArgumentException("Expected text-compatible value but got $this")
-    }
-}
-
 private fun NarrativeValue.asStringCompatible(): String {
     return when (this) {
         NarrativeValue.Null -> "null"
@@ -269,7 +259,6 @@ private fun NarrativeValue.asStringCompatible(): String {
         is NarrativeValue.Int32 -> value.toString()
         is NarrativeValue.Float64 -> value.toString()
         is NarrativeValue.Text -> value
-        is NarrativeValue.Entity -> id
         is NarrativeValue.HostObject -> value.toString()
     }
 }
@@ -286,15 +275,6 @@ private fun NarrativeValue.asNullableText(): String? {
         NarrativeValue.Null -> null
         is NarrativeValue.Text -> value
         else -> throw IllegalArgumentException("Expected nullable text value but got $this")
-    }
-}
-
-private fun NarrativeValue.toSpeakerSnapshot(): NarrativeValueSnapshot {
-    return when (this) {
-        NarrativeValue.Null -> NullValueSnapshot
-        is NarrativeValue.Text -> TextValueSnapshot(value)
-        is NarrativeValue.Entity -> EntityValueSnapshot(id)
-        else -> throw IllegalArgumentException("Built-in `say` cannot serialize speaker value `$this`")
     }
 }
 

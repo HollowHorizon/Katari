@@ -1,7 +1,6 @@
 package ru.hollowhorizon.narrate
 
 import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceOptionSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.EntityValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeHost
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot
@@ -124,16 +123,6 @@ class SwingNarrativeHost : NarrativeHost {
 
     override fun narrate(text: String, resume: () -> Unit) {
         showText(text)
-        showContinue(resume)
-    }
-
-    override fun say(speaker: NarrativeValueSnapshot?, text: String, resume: () -> Unit) {
-        val speakerName = when (speaker) {
-            is EntityValueSnapshot -> speaker.id
-            is TextValueSnapshot -> speaker.value
-            else -> "unknown"
-        }
-        showText("$speakerName: $text")
         showContinue(resume)
     }
 

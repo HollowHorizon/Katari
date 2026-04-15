@@ -451,7 +451,7 @@ private fun com.sunnychung.lib.multiplatform.kotlite.model.TypeNode.matches(valu
     }
     return when (name) {
         "Any" -> true
-        "String" -> value is NarrativeValue.Text || value is NarrativeValue.Entity
+        "String" -> value is NarrativeValue.Text
         "Boolean" -> value is NarrativeValue.Bool
         "Int" -> value is NarrativeValue.Int32
         "Double" -> value is NarrativeValue.Float64 || value is NarrativeValue.Int32
@@ -467,7 +467,6 @@ private fun NarrativeValue.toRuntimeValue(interpreter: Interpreter): RuntimeValu
         is NarrativeValue.Int32 -> IntValue(value, symbolTable)
         is NarrativeValue.Float64 -> DoubleValue(value, symbolTable)
         is NarrativeValue.Text -> StringValue(value, symbolTable)
-        is NarrativeValue.Entity -> StringValue(id, symbolTable)
         is NarrativeValue.HostObject -> {
             value as? RuntimeValue
                 ?: throw IllegalArgumentException(
