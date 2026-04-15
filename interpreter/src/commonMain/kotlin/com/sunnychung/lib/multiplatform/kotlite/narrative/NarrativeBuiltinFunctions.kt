@@ -259,6 +259,7 @@ private fun NarrativeValue.asStringCompatible(): String {
         is NarrativeValue.Int32 -> value.toString()
         is NarrativeValue.Float64 -> value.toString()
         is NarrativeValue.Text -> value
+        is NarrativeValue.Lambda -> "Lambda($id)"
         is NarrativeValue.HostObject -> value.toString()
     }
 }

@@ -77,6 +77,7 @@ class NarrativeStateSnapshotCodec(
             is NarrativeValue.Int32 -> Int32ValueSnapshot(value.value)
             is NarrativeValue.Float64 -> Float64ValueSnapshot(value.value)
             is NarrativeValue.Text -> TextValueSnapshot(value.value)
+            is NarrativeValue.Lambda -> LambdaValueSnapshot(value.id)
             is NarrativeValue.HostObject -> {
                 if (value.typeId == CHOICE_OPTION_TYPE_ID) {
                     val option = value.value as? ChoiceOptionValue
@@ -109,6 +110,7 @@ class NarrativeStateSnapshotCodec(
             is Int32ValueSnapshot -> NarrativeValue.Int32(snapshot.value)
             is Float64ValueSnapshot -> NarrativeValue.Float64(snapshot.value)
             is TextValueSnapshot -> NarrativeValue.Text(snapshot.value)
+            is LambdaValueSnapshot -> NarrativeValue.Lambda(snapshot.id)
             is ChoiceOptionValueSnapshot -> NarrativeValue.HostObject(
                 typeId = CHOICE_OPTION_TYPE_ID,
                 value = ChoiceOptionValue(

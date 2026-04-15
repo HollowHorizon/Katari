@@ -24,6 +24,7 @@ import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeSlotValue
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskState
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatus
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValue
+import com.sunnychung.lib.multiplatform.kotlite.narrative.LambdaValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueCodec
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueCodecRegistry
 import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueRestoreContext
@@ -767,6 +768,69 @@ class NarrativeInstanceTest {
         assertEquals(listOf("sum=5"), events)
         assertEquals(NarrativeValue.Int32(5), task.localVariables.getValue("sum"))
         assertTrue(task.localVariables.keys.none { it.startsWith("__narrative_fn_") })
+    }
+
+    @Test
+    fun lambdaLiteralCanBeStoredAndInvokedInsideNarrativeScript() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val twice = { value: Int -> value + value }
+                    val result = twice(4)
+                    "result=${'$'}result"
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val task = instance.currentState().tasks.single()
+        assertEquals(listOf("result=8"), events)
+        assertIs<NarrativeValue.Lambda>(task.localVariables.getValue("twice"))
+        assertEquals(NarrativeValue.Int32(8), task.localVariables.getValue("result"))
+    }
+
+    @Test
+    fun snapshotRoundTripPreservesLambdaValues() = runTest {
+        val codec = NarrativeStateSnapshotCodec()
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val formatter = { value: Int -> "v=${'$'}value" }
+                    "ok"
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val snapshot = instance.serializeState()
+        val lambdaSnapshot = snapshot.tasks.single().localVariables.getValue("formatter")
+        val restored = codec.restore(snapshot)
+        val restoredLambda = restored.tasks.single().localVariables.getValue("formatter")
+
+        assertIs<LambdaValueSnapshot>(lambdaSnapshot)
+        assertIs<NarrativeValue.Lambda>(restoredLambda)
     }
 
     @Test

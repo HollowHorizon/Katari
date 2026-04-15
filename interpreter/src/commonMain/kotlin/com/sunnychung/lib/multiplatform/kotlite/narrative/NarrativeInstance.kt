@@ -497,6 +497,7 @@ class NarrativeInstance(
                 is LiteralExpression -> expression.value
                 is VariableExpression -> resolveVariableValue(state, task, expression.name)
                 is SlotExpression -> resolveSlotValue(state, task, expression.slot)
+                is LambdaLiteralExpression -> NarrativeValue.Lambda(expression.lambdaId)
                 is UnaryExpression -> {
                     val operand = evaluateExpression(state, task, expression.operand)
                     when (expression.operator) {
@@ -705,6 +706,7 @@ class NarrativeInstance(
             is LiteralExpression -> emptySet()
             is VariableExpression -> emptySet()
             is SlotExpression -> setOf(expression.slot)
+            is LambdaLiteralExpression -> emptySet()
             is UnaryExpression -> collectReferencedSlots(expression.operand)
             is BinaryExpression -> collectReferencedSlots(expression.left) + collectReferencedSlots(expression.right)
         }
@@ -861,6 +863,7 @@ class NarrativeInstance(
             is NarrativeValue.Int32 -> value.toString()
             is NarrativeValue.Float64 -> value.toString()
             is NarrativeValue.Text -> value
+            is NarrativeValue.Lambda -> "Lambda($id)"
             is NarrativeValue.HostObject -> value.toString()
         }
     }

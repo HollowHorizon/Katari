@@ -96,6 +96,11 @@ data class SlotExpression(
     override val position: SourcePosition? = null,
 ) : NarrativeExpression
 
+data class LambdaLiteralExpression(
+    val lambdaId: String,
+    override val position: SourcePosition? = null,
+) : NarrativeExpression
+
 data class UnaryExpression(
     val operator: NarrativeUnaryOperator,
     val operand: NarrativeExpression,
@@ -139,6 +144,7 @@ sealed interface NarrativeValue {
     data class Int32(val value: Int) : NarrativeValue
     data class Float64(val value: Double) : NarrativeValue
     data class Text(val value: String) : NarrativeValue
+    data class Lambda(val id: String) : NarrativeValue
     data class HostObject(val typeId: String, val value: Any) : NarrativeValue
 }
 
@@ -333,6 +339,10 @@ data class Float64ValueSnapshot(val value: Double) : NarrativeValueSnapshot()
 data class TextValueSnapshot(val value: String) : NarrativeValueSnapshot()
 
 @Serializable
+@SerialName("lambda")
+data class LambdaValueSnapshot(val id: String) : NarrativeValueSnapshot()
+
+@Serializable
 @SerialName("choice_option")
 data class ChoiceOptionValueSnapshot(
     val id: String,
@@ -384,6 +394,7 @@ data class NarrativeValueCodecRegistry(
                 subclass(Int32ValueSnapshot::class, Int32ValueSnapshot.serializer())
                 subclass(Float64ValueSnapshot::class, Float64ValueSnapshot.serializer())
                 subclass(TextValueSnapshot::class, TextValueSnapshot.serializer())
+                subclass(LambdaValueSnapshot::class, LambdaValueSnapshot.serializer())
                 codecsByTypeId.values.forEach {
                     @Suppress("UNCHECKED_CAST")
                     subclass(
