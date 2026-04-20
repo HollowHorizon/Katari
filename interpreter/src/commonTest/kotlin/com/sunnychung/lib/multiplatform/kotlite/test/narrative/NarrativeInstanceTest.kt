@@ -825,12 +825,67 @@ class NarrativeInstanceTest {
         instance.join()
 
         val snapshot = instance.serializeState()
-        val lambdaSnapshot = snapshot.tasks.single().localVariables.getValue("formatter")
+        val lambdaSnapshot = snapshot.tasks.single().callFrames.last().localVariables.getValue("formatter")
         val restored = codec.restore(snapshot)
         val restoredLambda = restored.tasks.single().localVariables.getValue("formatter")
 
         assertIs<LambdaValueSnapshot>(lambdaSnapshot)
         assertIs<NarrativeValue.Lambda>(restoredLambda)
+    }
+
+    @Test
+    fun snapshotStoresLocalsOnlyInsideCallFrames() = runTest {
+        val codec = NarrativeStateSnapshotCodec()
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val name = "Igor"
+                    "ok"
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val snapshot = instance.serializeState()
+        val restored = codec.restore(snapshot)
+
+        assertEquals(emptyMap(), snapshot.tasks.single().localVariables)
+        assertEquals(
+            com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot("Igor"),
+            snapshot.tasks.single().callFrames.last().localVariables.getValue("name"),
+        )
+        assertEquals(NarrativeValue.Text("Igor"), restored.tasks.single().localVariables.getValue("name"))
+    }
+
+    @Test
+    fun restoreLegacySnapshotWithoutCallFramesKeepsTaskLocals() = runTest {
+        val codec = NarrativeStateSnapshotCodec()
+        val restored = codec.restore(
+            NarrativeStateSnapshot(
+                programVersion = 1,
+                tasks = listOf(
+                    com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskSnapshot(
+                        id = "main",
+                        instructionPointer = 0,
+                        localVariables = mapOf("name" to com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot("Igor")),
+                        callFrames = emptyList(),
+                        nextCallFrameId = ROOT_CALL_FRAME_ID + 1,
+                        slots = emptyMap(),
+                        status = com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatusSnapshot.Ready,
+                    )
+                ),
+            )
+        )
+
+        assertEquals(NarrativeValue.Text("Igor"), restored.tasks.single().localVariables.getValue("name"))
+        assertEquals(emptyList(), restored.tasks.single().callFrames)
     }
 
     @Test
@@ -1290,5 +1345,3 @@ object PromptFlagFunction : NarrativeFunctionDefinition {
         resume(null)
     }
 }
-
-

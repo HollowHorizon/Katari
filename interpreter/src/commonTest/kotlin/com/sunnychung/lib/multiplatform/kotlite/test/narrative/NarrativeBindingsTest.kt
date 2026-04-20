@@ -22,8 +22,11 @@ import com.sunnychung.lib.multiplatform.kotlite.narrative.SuspendableNarrativeFu
 import com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.narrative.toKotlite
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.stdlib.AllStdLibModules
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -311,6 +314,283 @@ class NarrativeBindingsTest {
         instance.join()
 
         assertEquals(listOf("HELLO"), events)
+    }
+
+    @Test
+    fun executionEnvironmentVarargFunctionsAreAvailableInNarrative() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            install(AllStdLibModules())
+            register(
+                ImmediateNarrativeFunctionDefinition(
+                    id = "capture",
+                    execute = { arguments, _ ->
+                        val value = assertIs<NarrativeValue.HostObject>(arguments.single()).value as RuntimeValue
+                        val holder = assertIs<KotlinValueHolder<*>>(value)
+                        val elements = assertIs<List<*>>(holder.value).map { assertIs<RuntimeValue>(it).convertToString() }
+                        events += elements.joinToString(prefix = "[", postfix = "]")
+                        NarrativeValue.Null
+                    }
+                )
+            )
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    capture(listOf(1, 2, 3, 4, 5))
+                """.trimIndent(),
+            ),
+            initialState = NarrativeState(
+                programVersion = 1,
+                tasks = listOf(NarrativeTaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("[1, 2, 3, 4, 5]"), events)
+    }
+
+    @Test
+    fun executionEnvironmentCollectionsSupportIndexPropertiesAndGenericExtensionFunctionsInNarrative() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            install(AllStdLibModules())
+            register(
+                ImmediateNarrativeFunctionDefinition(
+                    id = "capture",
+                    execute = { arguments, _ ->
+                        events += when (val value = arguments.single()) {
+                            NarrativeValue.Null -> "null"
+                            is NarrativeValue.Bool -> value.value.toString()
+                            is NarrativeValue.Int32 -> value.value.toString()
+                            is NarrativeValue.Float64 -> value.value.toString()
+                            is NarrativeValue.Text -> value.value
+                            is NarrativeValue.Lambda -> "Lambda(${value.id})"
+                            is NarrativeValue.HostObject -> (value.value as RuntimeValue).convertToString()
+                        }
+                        NarrativeValue.Null
+                    }
+                )
+            )
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val list = listOf(1, 2, 3, 4, 5)
+                    capture(list[0])
+                    capture(list.size)
+                    capture(list.min())
+                """.trimIndent(),
+            ),
+            initialState = NarrativeState(
+                programVersion = 1,
+                tasks = listOf(NarrativeTaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("1", "5", "1"), events)
+    }
+
+    @Test
+    fun executionEnvironmentMapOfSupportsToInfixInNarrative() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            install(AllStdLibModules())
+            register(
+                ImmediateNarrativeFunctionDefinition(
+                    id = "capture",
+                    execute = { arguments, _ ->
+                        events += when (val value = arguments.single()) {
+                            NarrativeValue.Null -> "null"
+                            is NarrativeValue.Bool -> value.value.toString()
+                            is NarrativeValue.Int32 -> value.value.toString()
+                            is NarrativeValue.Float64 -> value.value.toString()
+                            is NarrativeValue.Text -> value.value
+                            is NarrativeValue.Lambda -> "Lambda(${value.id})"
+                            is NarrativeValue.HostObject -> (value.value as RuntimeValue).convertToString()
+                        }
+                        NarrativeValue.Null
+                    }
+                )
+            )
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val map = mapOf("hello" to 5)
+                    capture(map["hello"])
+                """.trimIndent(),
+            ),
+            initialState = NarrativeState(
+                programVersion = 1,
+                tasks = listOf(NarrativeTaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("5"), events)
+    }
+
+    @Test
+    fun runtimeCollectionsRoundTripThroughSnapshotCodec() = runTest {
+        val bindings = NarrativeBindings {
+            install(AllStdLibModules())
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val list = listOf(1, 2, 3)
+                    val map = mapOf("hello" to 5)
+                    "ok"
+                """.trimIndent(),
+            ),
+            initialState = NarrativeState(
+                programVersion = 1,
+                tasks = listOf(NarrativeTaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val restored = bindings.snapshotCodec.restore(instance.serializeState())
+        val locals = restored.tasks.single().localVariables
+        val list = assertIs<NarrativeValue.HostObject>(locals.getValue("list")).value as RuntimeValue
+        val map = assertIs<NarrativeValue.HostObject>(locals.getValue("map")).value as RuntimeValue
+
+        assertEquals("List", list.type().name)
+        assertEquals("Map", map.type().name)
+        assertEquals("5", ((map as KotlinValueHolder<*>).value as Map<*, *>).values.single().let { (it as RuntimeValue).convertToString() })
+    }
+
+    @Test
+    fun mutableCollectionsSupportIndexAssignmentInNarrative() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            install(AllStdLibModules())
+            register(
+                ImmediateNarrativeFunctionDefinition(
+                    id = "capture",
+                    execute = { arguments, _ ->
+                        events += when (val value = arguments.single()) {
+                            NarrativeValue.Null -> "null"
+                            is NarrativeValue.Bool -> value.value.toString()
+                            is NarrativeValue.Int32 -> value.value.toString()
+                            is NarrativeValue.Float64 -> value.value.toString()
+                            is NarrativeValue.Text -> value.value
+                            is NarrativeValue.Lambda -> "Lambda(${value.id})"
+                            is NarrativeValue.HostObject -> (value.value as RuntimeValue).convertToString()
+                        }
+                        NarrativeValue.Null
+                    }
+                )
+            )
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val list = mutableListOf(1, 2, 3)
+                    list[0] = 42
+                    val map = mutableMapOf("hello" to 5)
+                    map["hello"] = 7
+                    capture(list[0])
+                    capture(map["hello"])
+                """.trimIndent(),
+            ),
+            initialState = NarrativeState(
+                programVersion = 1,
+                tasks = listOf(NarrativeTaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("42", "7"), events)
+    }
+
+    @Test
+    fun userDefinedExtensionSetOperatorIsSupportedInNarrative() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    operator fun String.set(index: String, value: Int): String {
+                        "${'$'}this: ${'$'}index (${ '$' }value)"
+                        return this
+                    }
+                    "Так, ну допустим"["И вот это"] = 1
+                """.trimIndent().replace("${ '$' }", "$"),
+            ),
+            initialState = NarrativeState(
+                programVersion = 1,
+                tasks = listOf(NarrativeTaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("Так, ну допустим: И вот это (1)"), events)
     }
 }
 

@@ -7,6 +7,9 @@ import com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
+import java.awt.Toolkit
+import java.awt.datatransfer.Clipboard
+import java.awt.datatransfer.StringSelection
 import java.io.File
 import javax.swing.BorderFactory
 import javax.swing.BoxLayout
@@ -112,6 +115,7 @@ class SwingNarrativeHost : NarrativeHost {
 
     fun showError(message: String, error: Throwable) {
         SwingUtilities.invokeLater {
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection("$message\n${error.message ?: error::class.simpleName}"), null)
             JOptionPane.showMessageDialog(
                 frame,
                 "$message\n${error.message ?: error::class.simpleName}",

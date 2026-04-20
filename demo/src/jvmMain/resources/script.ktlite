@@ -1,5 +1,9 @@
-var a = 1
+operator fun String.set(index: String, value: Int): String {
+    "$this: $index ($value)"
+    "Сейчас посмотрим, что дальше"
+    return this
+}
 
-val list = listOf(1, 2, 3, 4, 5)
+"Так, ну допустим"["И вот это"] = 1
 
-"$list"
+"А ещё это"["С вот этим"] = 2

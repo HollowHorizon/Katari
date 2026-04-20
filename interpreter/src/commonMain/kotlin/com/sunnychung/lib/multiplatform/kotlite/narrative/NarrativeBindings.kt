@@ -2,11 +2,14 @@ package com.sunnychung.lib.multiplatform.kotlite.narrative
 
 import com.sunnychung.lib.multiplatform.kotlite.Interpreter
 import com.sunnychung.lib.multiplatform.kotlite.KotliteInterpreter
+import com.sunnychung.lib.multiplatform.kotlite.extension.resolveGenericParameterTypeToUpperBound
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
 import com.sunnychung.lib.multiplatform.kotlite.model.ClassDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.DataType
 import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.ExtensionProperty
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.GlobalProperty
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
@@ -14,10 +17,15 @@ import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
 import com.sunnychung.lib.multiplatform.kotlite.model.LibraryModule
 import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
 import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ObjectType
 import com.sunnychung.lib.multiplatform.kotlite.model.ProvidedClassDefinition
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.TypeNode
+import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameterNode
+import com.sunnychung.lib.multiplatform.kotlite.model.toTypeNode
+import com.sunnychung.lib.multiplatform.kotlite.model.toTypeParameterNodes
 import kotlinx.serialization.KSerializer
 import kotlin.reflect.KClass
 
@@ -197,7 +205,10 @@ class NarrativeBindingsBuilder {
         val normalizedGlobals = environmentGlobals + globals
         return NarrativeBindings(
             functionRegistry = NarrativeFunctionRegistry(environmentDefinitions + functionDefinitions),
-            snapshotCodec = NarrativeStateSnapshotCodec(valueCodecs = codecRegistry),
+            snapshotCodec = NarrativeStateSnapshotCodec(
+                valueCodecs = codecRegistry,
+                executionEnvironment = executionEnvironment,
+            ),
             globals = normalizedGlobals,
             executionEnvironment = executionEnvironment,
         )
@@ -329,12 +340,25 @@ private fun buildExecutionEnvironmentNarrativeBridge(
         executionEnvironment = executionEnvironment,
     )
     val declarations = executionEnvironment.getBuiltinFunctions(interpreter.symbolTable())
-    val groupedByName = declarations.groupBy { it.name }
-    val definitions = groupedByName.map { (name, overloads) ->
+    val constructableClassNames = executionEnvironment.getBuiltinClasses(interpreter.symbolTable())
+        .filter { it.isInstanceCreationAllowed }
+        .map { it.fullQualifiedName.removeSuffix("?").removeSuffix(".Companion") }
+        .distinct()
+    val extensionProperties = executionEnvironment.getExtensionProperties(interpreter.symbolTable()).onEach { property ->
+        if (property.receiverType == null) {
+            property.receiverType = property.receiver.toTypeNode("<NarrativeBridge>")
+        }
+        if (property.typeNode == null) {
+            property.typeNode = property.type.toTypeNode("<NarrativeBridge>")
+        }
+    }
+    val definitionNames = (declarations.map { it.name } + extensionProperties.map { it.declaredName } + constructableClassNames).distinct()
+    val definitions = definitionNames.map { name ->
         ExecutionEnvironmentNarrativeFunctionDefinition(
             id = name,
             interpreter = interpreter,
-            overloads = overloads,
+            overloads = declarations.filter { it.name == name },
+            properties = extensionProperties.filter { it.declaredName == name },
         )
     }
     val globals = executionEnvironment.getGlobalProperties(interpreter.symbolTable())
@@ -353,6 +377,7 @@ private class ExecutionEnvironmentNarrativeFunctionDefinition(
     override val id: String,
     private val interpreter: Interpreter,
     private val overloads: List<FunctionDeclarationNode>,
+    private val properties: List<ExtensionProperty>,
 ) : NarrativeFunctionDefinition {
 
     override suspend fun startCall(
@@ -382,32 +407,44 @@ private class ExecutionEnvironmentNarrativeFunctionDefinition(
     private fun invokeOverload(arguments: List<NarrativeValue>): RuntimeValue {
         val filtered = overloads.filter { overload ->
             val receiverOffset = if (overload.receiver != null) 1 else 0
-            if (arguments.size != overload.valueParameters.size + receiverOffset) {
+            val callArguments = arguments.drop(receiverOffset)
+            val isVararg = overload.isNarrativeVararg()
+            if (!isVararg && callArguments.size != overload.valueParameters.size) {
                 return@filter false
             }
             if (overload.receiver != null) {
                 val receiverArgument = arguments.first()
                 val receiverType = overload.receiver
-                if (!receiverType.matches(receiverArgument)) {
+                if (!receiverType.matches(receiverArgument, overload.typeParameters, interpreter)) {
                     return@filter false
                 }
             }
-            overload.valueParameters.withIndex().all { (index, parameter) ->
-                val argumentIndex = if (overload.receiver != null) index + 1 else index
-                val declaredType = parameter.declaredType ?: return@all true
-                declaredType.matches(arguments[argumentIndex])
+            if (isVararg) {
+                val parameter = overload.valueParameters.singleOrNull() ?: return@filter false
+                val declaredType = parameter.declaredType ?: return@filter true
+                callArguments.all { declaredType.matches(it, overload.typeParameters, interpreter) }
+            } else {
+                overload.valueParameters.withIndex().all { (index, parameter) ->
+                    val declaredType = parameter.declaredType ?: return@all true
+                    declaredType.matches(callArguments[index], overload.typeParameters, interpreter)
+                }
             }
         }
         val overload = filtered.firstOrNull()
         if (overload != null) {
             val (receiver, callArgs) = splitReceiver(overload, arguments)
-            return overload.execute(
-                interpreter = interpreter,
-                receiver = receiver,
-                arguments = callArgs,
-                typeArguments = emptyMap(),
-            )
+            val inferredTypeArguments = inferTypeArguments(overload, receiver, callArgs)
+            return interpreter.evalFunctionCall(
+                arguments = callArgs.toTypedArray(),
+                typeArguments = overload.typeParameters.mapNotNull { inferredTypeArguments[it.name] }.toTypedArray(),
+                callPosition = SourcePosition.NONE,
+                functionNode = overload,
+                extraScopeParameters = emptyMap(),
+                extraTypeResolutions = emptyList(),
+                subject = receiver,
+            ).result
         }
+        invokePropertyGetterIfAvailable(arguments)?.let { return it }
         return invokeConstructorIfAvailable(id, arguments)
             ?: throw IllegalArgumentException(
                 "No ExecutionEnvironment callable of `$id` matches narrative arguments: $arguments"
@@ -423,12 +460,92 @@ private class ExecutionEnvironmentNarrativeFunctionDefinition(
         } else {
             null
         }
-        val callArgs = if (overload.receiver != null) {
+        val narrativeArguments = if (overload.receiver != null) {
             arguments.drop(1)
         } else {
             arguments
-        }.map { it.toRuntimeValue(interpreter) }
+        }
+        val callArgs = narrativeArguments.map { it.toRuntimeValue(interpreter) }
         return receiver to callArgs
+    }
+
+    private fun inferTypeArguments(
+        overload: FunctionDeclarationNode,
+        receiver: RuntimeValue?,
+        arguments: List<RuntimeValue>,
+    ): Map<String, TypeNode> {
+        if (overload.typeParameters.isEmpty()) {
+            return emptyMap()
+        }
+
+        val inferred = linkedMapOf<String, DataType>()
+        overload.receiver?.let { receiverType ->
+            receiver?.let { collectTypeArguments(receiverType, it.type(), overload.typeParameters, inferred) }
+        }
+
+        val parameterTypes = overload.valueParameters.mapNotNull { it.declaredType }
+        if (overload.isNarrativeVararg()) {
+            val parameterType = parameterTypes.singleOrNull()
+            if (parameterType != null) {
+                arguments.forEach { argument ->
+                    collectTypeArguments(parameterType, argument.type(), overload.typeParameters, inferred)
+                }
+            }
+        } else {
+            parameterTypes.zip(arguments).forEach { (parameterType, argument) ->
+                collectTypeArguments(parameterType, argument.type(), overload.typeParameters, inferred)
+            }
+        }
+
+        return overload.typeParameters.associate { parameter ->
+            val inferredType = inferred[parameter.name]
+                ?: interpreter.symbolTable().assertToDataType(
+                    parameter.typeUpperBound ?: TypeNode(SourcePosition.NONE, "Any", null, true)
+                )
+            parameter.name to inferredType.toTypeNode()
+        }
+    }
+
+    private fun collectTypeArguments(
+        declaredType: TypeNode,
+        actualType: DataType,
+        typeParameters: List<TypeParameterNode>,
+        inferred: MutableMap<String, DataType>,
+    ) {
+        val typeParameterNames = typeParameters.map { it.name }.toSet()
+        if (declaredType.name in typeParameterNames) {
+            mergeInferredType(declaredType.name, actualType, inferred)
+            return
+        }
+        if (declaredType.name == "<Repeated>") {
+            declaredType.arguments?.singleOrNull()?.let {
+                collectTypeArguments(it, actualType, typeParameters, inferred)
+            }
+            return
+        }
+        val actualObjectType = actualType.asObjectType() ?: return
+        val matchingType = if (declaredType.name == actualObjectType.name) {
+            actualObjectType
+        } else {
+            actualObjectType.findSuperType(declaredType.name) ?: return
+        }
+        declaredType.arguments.orEmpty().zip(matchingType.arguments).forEach { (declaredArgument, actualArgument) ->
+            collectTypeArguments(declaredArgument, actualArgument, typeParameters, inferred)
+        }
+    }
+
+    private fun mergeInferredType(
+        name: String,
+        candidate: DataType,
+        inferred: MutableMap<String, DataType>,
+    ) {
+        val existing = inferred[name]
+        inferred[name] = when {
+            existing == null -> candidate
+            existing.isConvertibleFrom(candidate) -> existing
+            candidate.isConvertibleFrom(existing) -> candidate
+            else -> interpreter.symbolTable().AnyType.copyOf(existing.isNullable || candidate.isNullable)
+        }
     }
 
     private fun invokeConstructorIfAvailable(name: String, arguments: List<NarrativeValue>): RuntimeValue? {
@@ -443,11 +560,55 @@ private class ExecutionEnvironmentNarrativeFunctionDefinition(
             callPosition = SourcePosition.NONE,
         )
     }
+
+    private fun invokePropertyGetterIfAvailable(arguments: List<NarrativeValue>): RuntimeValue? {
+        if (arguments.size != 1) {
+            return null
+        }
+        val receiver = arguments.single().toRuntimeValue(interpreter)
+
+        if (receiver is com.sunnychung.lib.multiplatform.kotlite.model.ClassInstance) {
+            receiver.clazz?.findMemberPropertyTransformedName(id)?.let { transformedName ->
+                return when (val value = receiver.read(interpreter = interpreter, name = transformedName)) {
+                    is RuntimeValue -> value
+                    else -> throw UnsupportedOperationException("Unsupported member property value for `$id`")
+                }
+            }
+        }
+
+        val property = properties.firstOrNull { candidate ->
+            candidate.receiverType?.matchesRuntimeType(receiver.type(), candidate.typeParameters.toTypeParameterNodes()) == true
+        } ?: return null
+        val getter = property.getter ?: return null
+        return getter(interpreter, receiver, property.typeArgumentsMap(receiver.type()))
+    }
 }
 
-private fun com.sunnychung.lib.multiplatform.kotlite.model.TypeNode.matches(value: NarrativeValue): Boolean {
+private fun FunctionDeclarationNode.isNarrativeVararg(): Boolean {
+    return valueParameters.firstOrNull()?.modifiers?.contains(FunctionValueParameterModifier.vararg) == true
+}
+
+private fun com.sunnychung.lib.multiplatform.kotlite.model.TypeNode.matches(
+    value: NarrativeValue,
+    typeParameters: List<com.sunnychung.lib.multiplatform.kotlite.model.TypeParameterNode> = emptyList(),
+    interpreter: Interpreter? = null,
+): Boolean {
+    if (name in typeParameters.map { it.name }) {
+        return value != NarrativeValue.Null || isNullable
+    }
+    if (name == "<Repeated>") {
+        val repeatedType = arguments?.singleOrNull()
+            ?: throw IllegalArgumentException("Repeated type `$this` must declare exactly one element type")
+        return repeatedType.matches(value, typeParameters, interpreter)
+    }
     if (value == NarrativeValue.Null) {
         return isNullable
+    }
+    if (value is NarrativeValue.HostObject) {
+        val runtimeValue = value.value as? RuntimeValue
+        if (runtimeValue != null) {
+            return matchesRuntimeType(runtimeValue.type(), typeParameters)
+        }
     }
     return when (name) {
         "Any" -> true
@@ -457,6 +618,54 @@ private fun com.sunnychung.lib.multiplatform.kotlite.model.TypeNode.matches(valu
         "Double" -> value is NarrativeValue.Float64 || value is NarrativeValue.Int32
         "Function" -> value is NarrativeValue.Lambda
         else -> value is NarrativeValue.HostObject && value.typeId == name
+    }
+}
+
+private fun com.sunnychung.lib.multiplatform.kotlite.model.TypeNode.matchesRuntimeType(
+    runtimeType: DataType,
+    typeParameters: List<com.sunnychung.lib.multiplatform.kotlite.model.TypeParameterNode> = emptyList(),
+): Boolean {
+    val typeParameterNames = typeParameters.map { it.name }.toSet()
+    if (name in typeParameterNames) {
+        return !runtimeType.isNullable || isNullable
+    }
+    if (name == "<Repeated>") {
+        val repeatedType = arguments?.singleOrNull()
+            ?: throw IllegalArgumentException("Repeated type `$this` must declare exactly one element type")
+        return repeatedType.matchesRuntimeType(runtimeType, typeParameters)
+    }
+
+    return when (name) {
+        "Any" -> isNullable || !runtimeType.isNullable
+        "String", "Boolean", "Int", "Double" -> {
+            val runtimeNode = runtimeType.toTypeNode()
+            name == runtimeNode.name || (name == "Double" && runtimeNode.name == "Int")
+        }
+        "Function" -> runtimeType.name == "Function"
+        else -> {
+            val objectType = runtimeType.asObjectType() ?: return false
+            if (objectType.isNullable && !isNullable) {
+                return false
+            }
+            val matchingType = if (objectType.name == name) {
+                objectType
+            } else {
+                objectType.findSuperType(name) ?: return false
+            }
+            val declaredArguments = arguments.orEmpty()
+            declaredArguments.isEmpty() || declaredArguments.zip(matchingType.arguments).all { (declared, actual) ->
+                declared.matchesRuntimeType(actual, typeParameters)
+            }
+        }
+    }
+}
+
+private fun DataType.asObjectType(): ObjectType? {
+    return when (this) {
+        is ObjectType -> this
+        is com.sunnychung.lib.multiplatform.kotlite.model.TypeParameterType -> upperBound.asObjectType()
+        is com.sunnychung.lib.multiplatform.kotlite.model.RepeatedType -> actualTypeOrAny().asObjectType()
+        else -> null
     }
 }
 
@@ -489,11 +698,10 @@ private fun RuntimeValue.toNarrativeValue(): NarrativeValue {
         is DoubleValue -> NarrativeValue.Float64(value)
         is StringValue -> NarrativeValue.Text(value)
         is KotlinValueHolder<*> -> {
-            val unwrapped = value
-            if (unwrapped == null) {
+            if (value == null) {
                 NarrativeValue.Null
             } else {
-                NarrativeValue.HostObject(typeId = type().name, value = unwrapped)
+                NarrativeValue.HostObject(typeId = type().name, value = this)
             }
         }
         else -> NarrativeValue.HostObject(typeId = type().name, value = this)

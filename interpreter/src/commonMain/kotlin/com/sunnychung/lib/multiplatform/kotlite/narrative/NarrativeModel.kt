@@ -209,7 +209,7 @@ data class NarrativeStateSnapshot(
 data class NarrativeTaskSnapshot(
     val id: String,
     val instructionPointer: Int,
-    val localVariables: Map<String, @Polymorphic NarrativeValueSnapshot>,
+    val localVariables: Map<String, @Polymorphic NarrativeValueSnapshot> = emptyMap(),
     val callFrames: List<NarrativeCallFrameSnapshot>,
     val nextCallFrameId: Int,
     val slots: Map<Int, NarrativeSlotSnapshot>,
@@ -352,6 +352,38 @@ data class ChoiceOptionValueSnapshot(
     val disabledText: String? = null,
 ) : NarrativeValueSnapshot()
 
+@Serializable
+@SerialName("runtime_list")
+data class RuntimeListValueSnapshot(
+    val typeId: String,
+    val elementType: String,
+    val elements: List<@Polymorphic NarrativeValueSnapshot>,
+) : NarrativeValueSnapshot()
+
+@Serializable
+@SerialName("runtime_map")
+data class RuntimeMapValueSnapshot(
+    val typeId: String,
+    val keyType: String,
+    val valueType: String,
+    val entries: List<RuntimeMapEntrySnapshot>,
+) : NarrativeValueSnapshot()
+
+@Serializable
+data class RuntimeMapEntrySnapshot(
+    val key: @Polymorphic NarrativeValueSnapshot,
+    val value: @Polymorphic NarrativeValueSnapshot,
+)
+
+@Serializable
+@SerialName("runtime_pair")
+data class RuntimePairValueSnapshot(
+    val firstType: String,
+    val secondType: String,
+    val first: @Polymorphic NarrativeValueSnapshot,
+    val second: @Polymorphic NarrativeValueSnapshot,
+) : NarrativeValueSnapshot()
+
 interface NarrativeValueCodec<S : NarrativeValueSnapshot> {
     val typeId: String
     val snapshotClass: KClass<S>
@@ -395,6 +427,9 @@ data class NarrativeValueCodecRegistry(
                 subclass(Float64ValueSnapshot::class, Float64ValueSnapshot.serializer())
                 subclass(TextValueSnapshot::class, TextValueSnapshot.serializer())
                 subclass(LambdaValueSnapshot::class, LambdaValueSnapshot.serializer())
+                subclass(RuntimeListValueSnapshot::class, RuntimeListValueSnapshot.serializer())
+                subclass(RuntimeMapValueSnapshot::class, RuntimeMapValueSnapshot.serializer())
+                subclass(RuntimePairValueSnapshot::class, RuntimePairValueSnapshot.serializer())
                 codecsByTypeId.values.forEach {
                     @Suppress("UNCHECKED_CAST")
                     subclass(
