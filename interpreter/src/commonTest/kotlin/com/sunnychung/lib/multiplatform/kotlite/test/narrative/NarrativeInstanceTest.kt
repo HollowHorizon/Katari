@@ -1194,6 +1194,39 @@ class NarrativeInstanceTest {
             events,
         )
     }
+
+    @Test
+    fun lambdaParameterShadowsOuterVariable() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val instance = NarrativeInstance(
+            program = KotliteNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    var a = 1
+                    val f = { a: Int ->
+                        "result: ${'$'}a"
+                    }
+                    f(42)
+                """.trimIndent(),
+            ),
+            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(listOf("result: 42"), events)
+    }
 }
 
 private fun builtinFunctionDefinitions(): Array<NarrativeFunctionDefinition> {

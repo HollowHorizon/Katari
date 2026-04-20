@@ -34,19 +34,23 @@ import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
 class NarrativeCompiler {
 
     private var temporarySlotCounter: Int = 0
-    private var lambdaCounter: Int = 0
+    private var lambdaCounter = 0
+    private var nextFrameIdCounter: Int = ROOT_CALL_FRAME_ID
     private val loopContexts = ArrayDeque<LoopContext>()
     private val checkpointScopes = ArrayDeque<CheckpointScope>()
     private val userFunctions = mutableMapOf<String, FunctionDeclarationNode>()
     private val lambdaBindings = ArrayDeque<MutableMap<String, String?>>()
+    private val frameIdStack = ArrayDeque<Int>()
 
     fun compile(script: ScriptNode): NarrativeProgram {
         temporarySlotCounter = 0
         lambdaCounter = 0
+        nextFrameIdCounter = ROOT_CALL_FRAME_ID
         loopContexts.clear()
         checkpointScopes.clear()
         userFunctions.clear()
         lambdaBindings.clear()
+        frameIdStack.clear()
 
         collectTopLevelUserFunctions(script)
 
@@ -68,6 +72,10 @@ class NarrativeCompiler {
     ) {
         lambdaBindings.addLast(shadowedNames.associateWith { null }.toMutableMap())
         checkpointScopes.addLast(CheckpointScope(isFunctionBoundary = isFunctionBoundary))
+        if (isFunctionBoundary) {
+            val newFrameId = nextFrameIdCounter++
+            frameIdStack.addLast(newFrameId)
+        }
         try {
             compileStatements(statements, instructions)
             val scope = checkpointScopes.last()
@@ -95,6 +103,9 @@ class NarrativeCompiler {
                 }
             }
         } finally {
+            if (isFunctionBoundary) {
+                frameIdStack.removeLast()
+            }
             checkpointScopes.removeLast()
             lambdaBindings.removeLast()
         }
@@ -612,9 +623,10 @@ class NarrativeCompiler {
 
         val parameterNames = declaration.valueParameters.map { it.name }
         val argumentExpressions = callNode.arguments.map { compileExpression(it.value, instructions) }
+        val lexicalParentFrameId = frameIdStack.lastOrNull()
         instructions += EnterCallFrameInstruction(
             functionId = functionName,
-            lexicalParentFrameId = null,
+            lexicalParentFrameId = lexicalParentFrameId,
             position = callNode.position,
         )
         parameterNames.forEachIndexed { index, parameterName ->
