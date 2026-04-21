@@ -79,7 +79,7 @@ kotlin {
         val commonTest by getting {
             dependencies {
                 implementation(kotlin("test"))
-                implementation(project(":kotlite-stdlib"))
+                findProject(":kotlite-stdlib")?.let { implementation(it) }
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
                 implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
             }

@@ -1,9 +1,5 @@
-operator fun String.set(index: String, value: Int): String {
-    "$this: $index ($value)"
-    "Сейчас посмотрим, что дальше"
-    return this
+val data = listOf(1, 2, 3, 4, 5)
+
+data.forEach {
+    "$it"
 }
-
-"Так, ну допустим"["И вот это"] = 1
-
-"А ещё это"["С вот этим"] = 2

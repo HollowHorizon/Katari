@@ -11,7 +11,13 @@ fun Double.toLong(): Long
 
 fun <T> Pair<T, T>.toList(): List<T>
 
-fun repeat(times: Int, action: (Int) -> Unit)
+inline fun repeat(times: Int, action: (Int) -> Unit) {
+    var index = 0
+    while (index < times) {
+        action(index)
+        ++index
+    }
+}
 fun <T> T.takeIf(predicate: (T) -> Boolean): T?
 fun <T> T.takeUnless(predicate: (T) -> Boolean): T?
 fun TODO(): Nothing

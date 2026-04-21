@@ -44,6 +44,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -379,8 +380,12 @@ class NarrativeInstanceTest {
             program = NarrativeProgram(emptyList()),
             initialState = com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
-                globals = mapOf("npc" to NarrativeValue.HostObject("npc", "npc-1")),
+                tasks = listOf(
+                    NarrativeTaskState(
+                        id = "main",
+                        localVariables = mapOf("npc" to NarrativeValue.HostObject("npc", "npc-1")),
+                    )
+                ),
             ),
             snapshotCodec = codec,
             coroutineScope = this,
@@ -405,7 +410,6 @@ class NarrativeInstanceTest {
                     status = NarrativeTaskStatus.Ready,
                 )
             ),
-            globals = mapOf("npc" to NarrativeValue.HostObject("npc", TestNpcRef("npc-1"))),
         )
 
         val snapshot = codec.serialize(original)
@@ -421,8 +425,46 @@ class NarrativeInstanceTest {
             TestRestoreContext,
         )
 
-        assertEquals(TestNpcRef("restored:npc-1"), assertIs<NarrativeValue.HostObject>(restored.globals.getValue("npc")).value)
+        assertEquals(emptyMap(), snapshot.globals)
+        assertEquals(emptyMap(), restored.globals)
         assertEquals(TestNpcRef("restored:npc-2"), assertIs<NarrativeValue.HostObject>(restored.tasks.single().localVariables.getValue("speaker")).value)
+    }
+
+    @Test
+    fun snapshotPreservesSharedValuesAcrossTasks() = runTest {
+        val codec = NarrativeStateSnapshotCodec(
+            valueCodecs = NarrativeValueCodecRegistry(listOf(TestNpcCodec())),
+        )
+        val npc = TestNpcRef("npc-1")
+        val original = NarrativeState(
+            programVersion = 1,
+            tasks = listOf(
+                NarrativeTaskState(
+                    id = "main",
+                    localVariables = mapOf("npc" to NarrativeValue.HostObject("npc", npc)),
+                ),
+                NarrativeTaskState(
+                    id = "side",
+                    localVariables = mapOf("npc" to NarrativeValue.HostObject("npc", npc)),
+                ),
+            ),
+        )
+
+        val snapshot = codec.serialize(original)
+        val restored = codec.restore(snapshot, TestRestoreContext)
+        val mainNpc = assertIs<NarrativeValue.HostObject>(
+            restored.tasks.first { it.id == "main" }.localVariables.getValue("npc")
+        ).value
+        val sideNpc = assertIs<NarrativeValue.HostObject>(
+            restored.tasks.first { it.id == "side" }.localVariables.getValue("npc")
+        ).value
+
+        assertEquals(
+            snapshot.tasks.first { it.id == "main" }.variableRefs.getValue("npc"),
+            snapshot.tasks.first { it.id == "side" }.variableRefs.getValue("npc"),
+        )
+        assertEquals(1, snapshot.values.size)
+        assertSame(mainNpc, sideNpc)
     }
 
     @Test
@@ -825,7 +867,10 @@ class NarrativeInstanceTest {
         instance.join()
 
         val snapshot = instance.serializeState()
-        val lambdaSnapshot = snapshot.tasks.single().callFrames.last().localVariables.getValue("formatter")
+        val snapshotTask = snapshot.tasks.single()
+        val lambdaSnapshot = snapshot.values.getValue(
+            snapshotTask.callFrames.last().variableRefs.getValue("formatter").valueId,
+        )
         val restored = codec.restore(snapshot)
         val restoredLambda = restored.tasks.single().localVariables.getValue("formatter")
 
@@ -855,11 +900,16 @@ class NarrativeInstanceTest {
 
         val snapshot = instance.serializeState()
         val restored = codec.restore(snapshot)
+        val snapshotTask = snapshot.tasks.single()
+        val nameSnapshot = snapshot.values.getValue(
+            snapshotTask.callFrames.last().variableRefs.getValue("name").valueId,
+        )
 
-        assertEquals(emptyMap(), snapshot.tasks.single().localVariables)
+        assertEquals(emptyMap(), snapshotTask.localVariables)
+        assertEquals(emptyMap(), snapshot.globals)
         assertEquals(
             com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot("Igor"),
-            snapshot.tasks.single().callFrames.last().localVariables.getValue("name"),
+            nameSnapshot,
         )
         assertEquals(NarrativeValue.Text("Igor"), restored.tasks.single().localVariables.getValue("name"))
     }

@@ -128,6 +128,9 @@ enum class NarrativeUnaryOperator {
 enum class NarrativeBinaryOperator {
     Add,
     Subtract,
+    Multiply,
+    Divide,
+    Remainder,
     LessThan,
     LessThanOrEquals,
     GreaterThan,
@@ -203,6 +206,7 @@ data class NarrativeStateSnapshot(
     val programVersion: Int,
     val tasks: List<NarrativeTaskSnapshot>,
     val globals: Map<String, @Polymorphic NarrativeValueSnapshot> = emptyMap(),
+    val values: Map<Int, @Polymorphic NarrativeValueSnapshot> = emptyMap(),
 )
 
 @Serializable
@@ -210,6 +214,8 @@ data class NarrativeTaskSnapshot(
     val id: String,
     val instructionPointer: Int,
     val localVariables: Map<String, @Polymorphic NarrativeValueSnapshot> = emptyMap(),
+    val variableRefs: Map<String, NarrativeValueReferenceSnapshot> = emptyMap(),
+    val values: Map<Int, @Polymorphic NarrativeValueSnapshot> = emptyMap(),
     val callFrames: List<NarrativeCallFrameSnapshot>,
     val nextCallFrameId: Int,
     val slots: Map<Int, NarrativeSlotSnapshot>,
@@ -222,6 +228,12 @@ data class NarrativeCallFrameSnapshot(
     val functionId: String,
     val lexicalParentFrameId: Int? = null,
     val localVariables: Map<String, @Polymorphic NarrativeValueSnapshot> = emptyMap(),
+    val variableRefs: Map<String, NarrativeValueReferenceSnapshot> = emptyMap(),
+)
+
+@Serializable
+data class NarrativeValueReferenceSnapshot(
+    val valueId: Int,
 )
 
 @Serializable
@@ -384,6 +396,22 @@ data class RuntimePairValueSnapshot(
     val second: @Polymorphic NarrativeValueSnapshot,
 ) : NarrativeValueSnapshot()
 
+@Serializable
+@SerialName("runtime_iterator")
+data class RuntimeIteratorValueSnapshot(
+    val elementType: String,
+    val elements: List<@Polymorphic NarrativeValueSnapshot>,
+) : NarrativeValueSnapshot()
+
+@Serializable
+@SerialName("runtime_map_entry_value")
+data class RuntimeMapEntryValueSnapshot(
+    val keyType: String,
+    val valueType: String,
+    val key: @Polymorphic NarrativeValueSnapshot,
+    val value: @Polymorphic NarrativeValueSnapshot,
+) : NarrativeValueSnapshot()
+
 interface NarrativeValueCodec<S : NarrativeValueSnapshot> {
     val typeId: String
     val snapshotClass: KClass<S>
@@ -430,6 +458,8 @@ data class NarrativeValueCodecRegistry(
                 subclass(RuntimeListValueSnapshot::class, RuntimeListValueSnapshot.serializer())
                 subclass(RuntimeMapValueSnapshot::class, RuntimeMapValueSnapshot.serializer())
                 subclass(RuntimePairValueSnapshot::class, RuntimePairValueSnapshot.serializer())
+                subclass(RuntimeIteratorValueSnapshot::class, RuntimeIteratorValueSnapshot.serializer())
+                subclass(RuntimeMapEntryValueSnapshot::class, RuntimeMapEntryValueSnapshot.serializer())
                 codecsByTypeId.values.forEach {
                     @Suppress("UNCHECKED_CAST")
                     subclass(

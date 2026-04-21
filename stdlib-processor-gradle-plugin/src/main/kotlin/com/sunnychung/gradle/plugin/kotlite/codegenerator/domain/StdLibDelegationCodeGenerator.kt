@@ -6,6 +6,7 @@ import com.sunnychung.lib.multiplatform.kotlite.Parser
 import com.sunnychung.lib.multiplatform.kotlite.extension.resolveGenericParameterTypeToUpperBound
 import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionBodyFormat
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionTypeNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterModifier
@@ -54,6 +55,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.DelegatedValue
 import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExtensionProperty
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionModifier
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionBodyFormat
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionType
 import com.sunnychung.lib.multiplatform.kotlite.model.GlobalProperty
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
@@ -173,6 +175,8 @@ internal class ScopedDelegationCodeGenerator(private val typeParameterNodes: Lis
     modifiers = setOf<FunctionModifier>(${modifiers.filter { it != FunctionModifier.nullaware }.joinToString(", ") {
         "FunctionModifier.${it.name}" }
     }),
+    inlineFunctionBody = ${(inlineBodySource ?: body?.let { CodeGenerator(it, isPrintDebugInfo = false).generateCode() })?.let { "\"${it.escape()}\"" } ?: "null"},
+    inlineFunctionBodyFormat = ${(inlineBodyFormat ?: body?.format)?.let { "FunctionBodyFormat.${it.name}" } ?: "null"},
     executable = { interpreter, receiver, args, typeArgs ->
         ${
             if (receiver != null && !receiver!!.name.endsWith(".Companion")) {
@@ -496,5 +500,6 @@ internal fun indent(n: Int) = " ".repeat(n)
 internal fun String.escape() =
     this
         .replace("\\", "\\\\")
+        .replace("$", "\${'$'}")
         .replace("\"", "\\\"")
         .replace("\n", "\\n")

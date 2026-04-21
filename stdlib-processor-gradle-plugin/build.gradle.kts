@@ -4,6 +4,7 @@ plugins {
     id("sunnychung.publication")
 }
 
+group = "io.github.sunny-chung"
 version = "1.0.0"
 
 fun getExtraString(name: String) = ext[name]?.toString()

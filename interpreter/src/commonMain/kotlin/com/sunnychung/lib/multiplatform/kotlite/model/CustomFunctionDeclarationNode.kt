@@ -36,7 +36,9 @@ class CustomFunctionDeclarationNode(
         )
     },
     declaredModifiers = modifiers ?: def.modifiers,
-    body = body ?: BlockNode(emptyList(), SourcePosition(def.position.filename, 1, 1), ScopeType.Function, FunctionBodyFormat.Block, def.returnType.toTypeNode(def.position.filename)),
+    body = body ?: def.inlineFunctionBody?.let {
+        Parser(Lexer(def.position.filename, it)).functionBody()
+    } ?: BlockNode(emptyList(), SourcePosition(def.position.filename, 1, 1), ScopeType.Function, FunctionBodyFormat.Block, def.returnType.toTypeNode(def.position.filename)),
     transformedRefName = transformedRefName,
 ) {
     override fun execute(interpreter: Interpreter, receiver: RuntimeValue?, arguments: List<RuntimeValue>, typeArguments: Map<String, DataType>): RuntimeValue {
@@ -51,6 +53,8 @@ class CustomFunctionDeclarationNode(
         valueParameters: List<FunctionValueParameterNode>,
         modifiers: Set<FunctionModifier>,
         body: BlockNode?,
+        inlineBodySource: String?,
+        inlineBodyFormat: FunctionBodyFormat?,
         transformedRefName: String?,
         inferredReturnType: TypeNode?,
     ): FunctionDeclarationNode {

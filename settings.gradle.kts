@@ -17,7 +17,7 @@ include(":kotlite-stdlib")
 include(":kotlite-stdlib-processor-plugin")
 include(":kotlite-apidoc")
 include(":kotlite-demo")
-//includeBuild("./stdlib-processor-gradle-plugin")
+includeBuild("./stdlib-processor-gradle-plugin")
 includeBuild("convention-plugins")
 
 project(":kotlite-interpreter").projectDir = File("$rootDir/interpreter")

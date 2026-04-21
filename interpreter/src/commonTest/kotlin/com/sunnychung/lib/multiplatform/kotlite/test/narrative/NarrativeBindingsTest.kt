@@ -54,14 +54,23 @@ class NarrativeBindingsTest {
         }
         val original = NarrativeState(
             programVersion = 1,
-            tasks = listOf(NarrativeTaskState(id = "main")),
+            tasks = listOf(
+                NarrativeTaskState(
+                    id = "main",
+                    localVariables = mapOf("npc" to bindings.globals.getValue("npc")),
+                )
+            ),
             globals = bindings.globals,
         )
 
         val snapshot = bindings.snapshotCodec.serialize(original)
         val restored = bindings.snapshotCodec.restore(snapshot, object : NarrativeValueRestoreContext {})
-        val restoredNpc = assertIs<NarrativeValue.HostObject>(restored.globals.getValue("npc")).value as BindingTestNpcRef
+        val restoredNpc = assertIs<NarrativeValue.HostObject>(
+            restored.tasks.single().localVariables.getValue("npc")
+        ).value as BindingTestNpcRef
 
+        assertEquals(emptyMap(), snapshot.globals)
+        assertEquals(emptyMap(), restored.globals)
         assertEquals("restored:npc-1", restoredNpc.id)
     }
 

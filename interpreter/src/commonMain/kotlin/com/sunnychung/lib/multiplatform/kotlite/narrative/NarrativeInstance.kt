@@ -524,12 +524,36 @@ class NarrativeInstance(
                             if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
                                 NarrativeValue.Float64(left.asDouble() - right.asDouble())
                             } else {
-                                NarrativeValue.Int32(left.asInt() - right.asInt())
-                            }
-                        }
-                        NarrativeBinaryOperator.LessThan -> {
-                            val right = evaluateExpression(state, task, expression.right)
-                            if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                        NarrativeValue.Int32(left.asInt() - right.asInt())
+                    }
+                }
+                NarrativeBinaryOperator.Multiply -> {
+                    val right = evaluateExpression(state, task, expression.right)
+                    if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                        NarrativeValue.Float64(left.asDouble() * right.asDouble())
+                    } else {
+                        NarrativeValue.Int32(left.asInt() * right.asInt())
+                    }
+                }
+                NarrativeBinaryOperator.Divide -> {
+                    val right = evaluateExpression(state, task, expression.right)
+                    if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                        NarrativeValue.Float64(left.asDouble() / right.asDouble())
+                    } else {
+                        NarrativeValue.Int32(left.asInt() / right.asInt())
+                    }
+                }
+                NarrativeBinaryOperator.Remainder -> {
+                    val right = evaluateExpression(state, task, expression.right)
+                    if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
+                        NarrativeValue.Float64(left.asDouble() % right.asDouble())
+                    } else {
+                        NarrativeValue.Int32(left.asInt() % right.asInt())
+                    }
+                }
+                NarrativeBinaryOperator.LessThan -> {
+                    val right = evaluateExpression(state, task, expression.right)
+                    if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
                                 NarrativeValue.Bool(left.asDouble() < right.asDouble())
                             } else {
                                 NarrativeValue.Bool(left.asInt() < right.asInt())

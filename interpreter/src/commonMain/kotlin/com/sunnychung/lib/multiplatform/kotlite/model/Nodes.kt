@@ -210,7 +210,7 @@ open class VariableReferenceNode(override val position: SourcePosition, val vari
  * Member names are the exact identifiers in Kotlin code
  */
 enum class FunctionModifier {
-    operator, open, override, abstract, infix, nullaware
+    operator, open, override, abstract, infix, inline, nullaware
 }
 
 enum class FunctionValueParameterModifier {
@@ -271,6 +271,8 @@ open class FunctionDeclarationNode(
     val declaredReturnType: TypeNode?,
     override val valueParameters: List<FunctionValueParameterNode>,
     val body: BlockNode?,
+    val inlineBodySource: String? = null,
+    val inlineBodyFormat: FunctionBodyFormat? = null,
     override val typeParameters: List<TypeParameterNode> = emptyList(),
     val extraTypeParameters: List<TypeParameterNode> = emptyList(), // for ad-hoc extension functions only. these type parameters have no type argument to resolve.
     val declaredModifiers: Set<FunctionModifier> = emptySet(),
@@ -315,6 +317,8 @@ open class FunctionDeclarationNode(
         valueParameters: List<FunctionValueParameterNode> = this.valueParameters,
         modifiers: Set<FunctionModifier> = this.modifiers,
         body: BlockNode? = this.body,
+        inlineBodySource: String? = this.inlineBodySource,
+        inlineBodyFormat: FunctionBodyFormat? = this.inlineBodyFormat,
         transformedRefName: String? = this.transformedRefName,
         inferredReturnType: TypeNode? = this.inferredReturnType,
     ): FunctionDeclarationNode {
@@ -330,6 +334,8 @@ open class FunctionDeclarationNode(
             valueParameters = valueParameters,
             declaredModifiers = modifiers,
             body = body,
+            inlineBodySource = inlineBodySource,
+            inlineBodyFormat = inlineBodyFormat,
             transformedRefName = transformedRefName,
             inferredReturnType = inferredReturnType,
         )

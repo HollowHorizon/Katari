@@ -26,6 +26,7 @@ fun main() = runBlocking {
     val program = KotliteNarrativeProgram(
         filename = "<Narrative>",
         code = SwingNarrativeHost::class.java.getResource("/script.ktlite")!!.readText(),
+        bindings = bindings,
     )
     val snapshotCodec = bindings.snapshotCodec
     val json = Json {

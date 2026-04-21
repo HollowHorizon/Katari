@@ -91,7 +91,11 @@ fun <T, R> List<T>.foldRightIndexed(
     initial: R,
     operation: (index: Int, T, acc: R) -> R
 ): R
-fun <T> Iterable<T>.forEach(action: (T) -> Unit)
+inline fun <T> Iterable<T>.forEach(action: (T) -> Unit) {
+    for (element in this) {
+        action(element)
+    }
+}
 fun <T> Iterable<T>.forEachIndexed(action: (index: Int, T) -> Unit)
 operator fun <T> List<T>.get(index: Int): T
 fun <T> List<T>.getOrElse(
@@ -119,7 +123,13 @@ fun <T> Iterable<T>.last(predicate: (T) -> Boolean): T
 fun <T> Iterable<T>.lastIndexOf(element: T): Int
 fun <T> Iterable<T>.lastOrNull(): T?
 fun <T> Iterable<T>.lastOrNull(predicate: (T) -> Boolean): T?
-fun <T, R> Iterable<T>.map(transform: (T) -> R): List<R>
+inline fun <T, R> Iterable<T>.map(transform: (T) -> R): List<R> {
+    val result = mutableListOf<R>()
+    for (element in this) {
+        result.add(transform(element))
+    }
+    return result
+}
 fun <T, R> Iterable<T>.mapIndexed(transform: (index: Int, T) -> R): List<R>
 nullaware fun <T, R : Any> Iterable<T>.mapIndexedNotNull(transform: (index: Int, T) -> R?): List<R>
 nullaware fun <T, R : Any> Iterable<T>.mapNotNull(transform: (T) -> R?): List<R>
@@ -280,7 +290,11 @@ nullaware fun <K, V, R : Any> Map<K, V>.firstNotNullOfOrNull(
 fun <K, V, R> Map<K, V>.flatMap(
     transform: (MapEntry<K, V>) -> Iterable<R>
 ): List<R>
-fun <K, V> Map<K, V>.forEach(action: (MapEntry<K, V>) -> Unit)
+inline fun <K, V> Map<K, V>.forEach(action: (MapEntry<K, V>) -> Unit) {
+    for (entry in this) {
+        action(entry)
+    }
+}
 operator fun <K, V> Map<K, V>.get(key: K): V?
 fun <K, V> Map<K, V>.getOrElse(key: K, defaultValue: () -> V): V
 fun <K, V> MutableMap<K, V>.getOrPut(key: K, defaultValue: () -> V): V
@@ -294,7 +308,13 @@ fun <T, K, V> Iterable<T>.groupBy(
 ): Map<K, List<V>>
 fun <K, V> Map<K, V>.isNotEmpty(): Boolean
 fun <K, V> Map<K, V>?.isNullOrEmpty(): Boolean
-fun <K, V, R> Map<K, V>.map(transform: (MapEntry<K, V>) -> R): List<R>
+inline fun <K, V, R> Map<K, V>.map(transform: (MapEntry<K, V>) -> R): List<R> {
+    val result = mutableListOf<R>()
+    for (entry in this) {
+        result.add(transform(entry))
+    }
+    return result
+}
 fun <K, V, R> Map<K, V>.mapKeys(transform: (MapEntry<K, V>) -> R): Map<R, V>
 nullaware fun <K, V, R : Any> Map<K, V>.mapNotNull(transform: (MapEntry<K, V>) -> R?): List<R>
 fun <K, V, R> Map<K, V>.mapValues(transform: (MapEntry<K, V>) -> R): Map<K, R>
@@ -415,7 +435,11 @@ fun <T, R> PrimitiveIterable<T>.foldIndexed(
     initial: R,
     operation: (index: Int, acc: R, T) -> R
 ): R
-fun <T> PrimitiveIterable<T>.forEach(action: (T) -> Unit)
+inline fun <T> PrimitiveIterable<T>.forEach(action: (T) -> Unit) {
+    for (element in this) {
+        action(element)
+    }
+}
 fun <T> PrimitiveIterable<T>.forEachIndexed(action: (index: Int, T) -> Unit)
 fun <T> PrimitiveIterable<T>.indexOf(element: T): Int
 fun <T> PrimitiveIterable<T>.indexOfFirst(predicate: (T) -> Boolean): Int
@@ -433,7 +457,13 @@ fun <T> PrimitiveIterable<T>.last(predicate: (T) -> Boolean): T
 fun <T> PrimitiveIterable<T>.lastIndexOf(element: T): Int
 fun <T> PrimitiveIterable<T>.lastOrNull(): T?
 fun <T> PrimitiveIterable<T>.lastOrNull(predicate: (T) -> Boolean): T?
-fun <T, R> PrimitiveIterable<T>.map(transform: (T) -> R): List<R>
+inline fun <T, R> PrimitiveIterable<T>.map(transform: (T) -> R): List<R> {
+    val result = mutableListOf<R>()
+    for (element in this) {
+        result.add(transform(element))
+    }
+    return result
+}
 fun <T, R> PrimitiveIterable<T>.mapIndexed(transform: (index: Int, T) -> R): List<R>
 nullaware fun <T, R : Any> PrimitiveIterable<T>.mapIndexedNotNull(transform: (index: Int, T) -> R?): List<R>
 nullaware fun <T, R : Any> PrimitiveIterable<T>.mapNotNull(transform: (T) -> R?): List<R>

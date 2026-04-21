@@ -69,7 +69,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.WhenSubjectNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
 
 val ACCEPTED_MODIFIERS = setOf(
-    "open", "override", "operator", "vararg", "enum", "abstract", "infix", "nullaware"
+    "open", "override", "operator", "vararg", "enum", "abstract", "infix", "inline", "nullaware"
 )
 
 /**
@@ -1938,6 +1938,54 @@ open class Parser(protected val lexer: Lexer) {
         }
     }
 
+    fun rawFunctionBody(): Pair<String, FunctionBodyFormat> {
+        val startIndex = currentToken.position.index
+        return if (currentToken.`is`(TokenType.Symbol, "=")) {
+            val endExclusive = consumeRawExpressionBody()
+            lexer.code.substring(startIndex, endExclusive) to FunctionBodyFormat.Expression
+        } else {
+            val endExclusive = consumeRawBlockBody()
+            lexer.code.substring(startIndex, endExclusive) to FunctionBodyFormat.Block
+        }
+    }
+
+    private fun consumeRawBlockBody(): Int {
+        var blockDepth = 0
+        var endExclusive = currentToken.endExclusive.index
+        do {
+            val token = currentToken
+            if (token.`is`(TokenType.Symbol, "{")) {
+                ++blockDepth
+            } else if (token.`is`(TokenType.Symbol, "}")) {
+                --blockDepth
+            }
+            endExclusive = token.endExclusive.index
+            eat(token.type)
+        } while (blockDepth > 0 && currentToken.type != TokenType.EOF)
+        if (blockDepth != 0) {
+            throw ExpectTokenMismatchException("}", lastToken().position)
+        }
+        return endExclusive
+    }
+
+    private fun consumeRawExpressionBody(): Int {
+        var groupDepth = 0
+        var endExclusive = currentToken.endExclusive.index
+        while (currentToken.type != TokenType.EOF) {
+            val token = currentToken
+            if (groupDepth == 0 && token.type in setOf(TokenType.NewLine, TokenType.Semicolon)) {
+                break
+            }
+            when (token.value) {
+                "(", "[", "{" -> ++groupDepth
+                ")", "]", "}" -> --groupDepth
+            }
+            endExclusive = token.endExclusive.index
+            eat(token.type)
+        }
+        return endExclusive
+    }
+
     /**
      * receiverType:
      *     [typeModifiers] (parenthesizedType | nullableType | typeReference)
@@ -2019,6 +2067,7 @@ open class Parser(protected val lexer: Lexer) {
             "override" -> FunctionModifier.override
             "abstract" -> FunctionModifier.abstract
             "infix" -> FunctionModifier.infix
+            "inline" -> FunctionModifier.inline
             "nullaware" -> FunctionModifier.nullaware
             else -> throw ParseException("Modifier `$it` cannot be applied to function")
         }
@@ -2040,7 +2089,7 @@ open class Parser(protected val lexer: Lexer) {
      *     [{NL} functionBody]
      *
      */
-    fun functionDeclaration(modifiers: Set<String>, isProcessBody: Boolean = true): FunctionDeclarationNode {
+    fun functionDeclaration(modifiers: Set<String>, isProcessBody: Boolean = true, isCaptureRawInlineBody: Boolean = false): FunctionDeclarationNode {
         val modifiers = modifiers.toFunctionModifiers()
         val t = eat(TokenType.Identifier, "fun")
         repeatedNL()
@@ -2059,18 +2108,24 @@ open class Parser(protected val lexer: Lexer) {
         } else {
             null
         }
-        val body = if (!isProcessBody || FunctionModifier.abstract in modifiers) {
+        val rawInlineBody = if (isCaptureRawInlineBody && isProcessBody && FunctionModifier.abstract !in modifiers) {
+            rawFunctionBody()
+        } else null
+        val body = if (!isProcessBody || FunctionModifier.abstract in modifiers || rawInlineBody != null) {
             null
         } else {
             functionBody()
         }
+        val bodyFormat = rawInlineBody?.second ?: body?.format
         return FunctionDeclarationNode(
             position = t.position,
             name = name,
             receiver = receiver,
-            declaredReturnType = type ?: TypeNode(t.position, "Unit", null, false).takeIf { body == null || body.format == FunctionBodyFormat.Block },
+            declaredReturnType = type ?: TypeNode(t.position, "Unit", null, false).takeIf { bodyFormat != FunctionBodyFormat.Expression },
             valueParameters = valueParameters,
             body = body,
+            inlineBodySource = rawInlineBody?.first,
+            inlineBodyFormat = rawInlineBody?.second,
             typeParameters = typeParameters,
             declaredModifiers = modifiers,
         )
@@ -2663,7 +2718,12 @@ open class Parser(protected val lexer: Lexer) {
                 result += propertyDeclaration(modifiers ?: emptySet(), isProcessBody = false)
                 modifiers = null
             } else if (isCurrentToken(TokenType.Identifier, "fun")) {
-                result += functionDeclaration(modifiers ?: emptySet(), isProcessBody = false)
+                val currentModifiers = modifiers ?: emptySet()
+                result += functionDeclaration(
+                    currentModifiers,
+                    isProcessBody = "inline" in currentModifiers,
+                    isCaptureRawInlineBody = "inline" in currentModifiers,
+                )
                 modifiers = null
             } else if (currentToken.type == TokenType.Identifier && currentToken.value in ACCEPTED_MODIFIERS) {
                 modifiers = modifiers()

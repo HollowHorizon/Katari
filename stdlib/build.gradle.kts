@@ -189,7 +189,6 @@ kotliteStdLibHeaderProcessor {
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.MutableListValue",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.MapValue",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.MutableMapValue",
-                "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.MapEntryIterator",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.MapEntryValue",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.SetValue",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.MutableSetValue",

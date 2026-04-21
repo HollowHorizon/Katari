@@ -8,10 +8,13 @@ import com.sunnychung.lib.multiplatform.kotlite.model.DelegatedValue
 import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
+import com.sunnychung.lib.multiplatform.kotlite.model.IteratorValue
 import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
 import com.sunnychung.lib.multiplatform.kotlite.model.ListValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
 import com.sunnychung.lib.multiplatform.kotlite.model.PairValue
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeMapEntry
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValueSnapshotIterator
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
@@ -34,31 +37,33 @@ class NarrativeStateSnapshotCodec(
     }
 
     fun serialize(state: NarrativeState): NarrativeStateSnapshot {
+        val valueTable = NarrativeSnapshotValueTable()
+        val tasks = state.tasks.map { task ->
+            NarrativeTaskSnapshot(
+                id = task.id,
+                instructionPointer = task.instructionPointer,
+                variableRefs = if (task.callFrames.isEmpty()) {
+                    task.localVariables.mapValues { (_, value) -> valueTable.reference(value) }
+                } else {
+                    emptyMap()
+                },
+                callFrames = task.callFrames.map { frame ->
+                    NarrativeCallFrameSnapshot(
+                        id = frame.id,
+                        functionId = frame.functionId,
+                        lexicalParentFrameId = frame.lexicalParentFrameId,
+                        variableRefs = frame.localVariables.mapValues { (_, value) -> valueTable.reference(value) },
+                    )
+                },
+                nextCallFrameId = task.nextCallFrameId,
+                slots = task.slots.mapValues { (_, value) -> serializeSlot(value) },
+                status = serializeStatus(task.status),
+            )
+        }
         return NarrativeStateSnapshot(
             programVersion = state.programVersion,
-            globals = state.globals.mapValues { (_, value) -> serializeValue(value) },
-            tasks = state.tasks.map { task ->
-                NarrativeTaskSnapshot(
-                    id = task.id,
-                    instructionPointer = task.instructionPointer,
-                    localVariables = if (task.callFrames.isEmpty()) {
-                        task.localVariables.mapValues { (_, value) -> serializeValue(value) }
-                    } else {
-                        emptyMap()
-                    },
-                    callFrames = task.callFrames.map { frame ->
-                        NarrativeCallFrameSnapshot(
-                            id = frame.id,
-                            functionId = frame.functionId,
-                            lexicalParentFrameId = frame.lexicalParentFrameId,
-                            localVariables = frame.localVariables.mapValues { (_, value) -> serializeValue(value) },
-                        )
-                    },
-                    nextCallFrameId = task.nextCallFrameId,
-                    slots = task.slots.mapValues { (_, value) -> serializeSlot(value) },
-                    status = serializeStatus(task.status),
-                )
-            },
+            tasks = tasks,
+            values = valueTable.values.mapValues { (_, value) -> serializeValue(value) },
         )
     }
 
@@ -66,23 +71,47 @@ class NarrativeStateSnapshotCodec(
         snapshot: NarrativeStateSnapshot,
         context: NarrativeValueRestoreContext = EmptyNarrativeValueRestoreContext,
     ): NarrativeState {
+        val sharedValues = mutableMapOf<Int, NarrativeValue>()
+        snapshot.values.forEach { (id, value) ->
+            sharedValues[id] = restoreValue(value, context)
+        }
         return NarrativeState(
             programVersion = snapshot.programVersion,
-            globals = snapshot.globals.mapValues { (_, value) -> restoreValue(value, context) },
             tasks = snapshot.tasks.map { task ->
-                val restoredLegacyLocals = task.localVariables.mapValues { (_, value) -> restoreValue(value, context) }
+                val restoredValues = sharedValues.toMutableMap()
+                task.values.forEach { (id, value) ->
+                    restoredValues[id] = restoreValue(value, context)
+                }
+                suspend fun restoreVariables(
+                    refs: Map<String, NarrativeValueReferenceSnapshot>,
+                    legacyValues: Map<String, NarrativeValueSnapshot>,
+                ): Map<String, NarrativeValue> {
+                    if (refs.isNotEmpty()) {
+                        return refs.mapValues { (_, ref) ->
+                            restoredValues[ref.valueId]
+                                ?: throw IllegalArgumentException("Snapshot value `${ref.valueId}` is not defined")
+                        }
+                    }
+                    val restored = mutableMapOf<String, NarrativeValue>()
+                    legacyValues.forEach { (name, value) ->
+                        restored[name] = restoreValue(value, context)
+                    }
+                    return restored
+                }
+                val restoredTaskLocals = restoreVariables(task.variableRefs, task.localVariables)
                 val restoredFrames = task.callFrames.map { frame ->
                     NarrativeCallFrameState(
                         id = frame.id,
                         functionId = frame.functionId,
                         lexicalParentFrameId = frame.lexicalParentFrameId,
-                        localVariables = frame.localVariables.mapValues { (_, value) -> restoreValue(value, context) },
+                        localVariables = restoreVariables(frame.variableRefs, frame.localVariables),
                     )
                 }
                 NarrativeTaskState(
                     id = task.id,
                     instructionPointer = task.instructionPointer,
-                    localVariables = restoredFrames.lastOrNull()?.localVariables ?: restoredLegacyLocals,
+                    localVariables = restoredFrames.lastOrNull()?.localVariables
+                        ?: restoredTaskLocals,
                     callFrames = restoredFrames,
                     nextCallFrameId = task.nextCallFrameId,
                     slots = task.slots.mapValues { (_, value) -> restoreSlot(value) },
@@ -163,6 +192,14 @@ class NarrativeStateSnapshotCodec(
             )
             is RuntimePairValueSnapshot -> NarrativeValue.HostObject(
                 typeId = "Pair",
+                value = restoreRuntimeValue(snapshot),
+            )
+            is RuntimeIteratorValueSnapshot -> NarrativeValue.HostObject(
+                typeId = "Iterator",
+                value = restoreRuntimeValue(snapshot),
+            )
+            is RuntimeMapEntryValueSnapshot -> NarrativeValue.HostObject(
+                typeId = "MapEntry",
                 value = restoreRuntimeValue(snapshot),
             )
             else -> {
@@ -279,6 +316,25 @@ class NarrativeStateSnapshotCodec(
                         second = serializeRuntimeValue(pair.second as RuntimeValue),
                     )
                 }
+                "MapEntry" -> {
+                    val runtimeObject = value as ClassInstance
+                    val entry = (value as KotlinValueHolder<*>).value as Map.Entry<*, *>
+                    RuntimeMapEntryValueSnapshot(
+                        keyType = (runtimeObject.typeArguments.getOrNull(0) ?: runtimeSymbolTable().AnyType).descriptiveName,
+                        valueType = (runtimeObject.typeArguments.getOrNull(1) ?: runtimeSymbolTable().AnyType).descriptiveName,
+                        key = serializeRuntimeValue(entry.key as RuntimeValue),
+                        value = serializeRuntimeValue(entry.value as RuntimeValue),
+                    )
+                }
+                "Iterator" -> {
+                    val runtimeObject = value as ClassInstance
+                    val iterator = (value as KotlinValueHolder<*>).value as? RuntimeValueSnapshotIterator
+                        ?: throw IllegalArgumentException("Runtime iterator `${value.type().descriptiveName}` is not snapshot-safe")
+                    RuntimeIteratorValueSnapshot(
+                        elementType = (runtimeObject.typeArguments.singleOrNull() ?: runtimeSymbolTable().AnyType).descriptiveName,
+                        elements = iterator.remainingElements().map { serializeRuntimeValue(it) },
+                    )
+                }
                 else -> throw IllegalArgumentException("No snapshot codec is registered for runtime value type `${value.type().descriptiveName}`")
             }
         }
@@ -340,6 +396,25 @@ class NarrativeStateSnapshotCodec(
                 typeB = runtimeDataType(snapshot.secondType),
                 symbolTable = symbolTable,
             )
+            is RuntimeIteratorValueSnapshot -> IteratorValue(
+                value = RuntimeValueSnapshotIterator(
+                    snapshot.elements.map { restoreRuntimeValue(it) }
+                ),
+                typeArgument = runtimeDataType(snapshot.elementType),
+                symbolTable = symbolTable,
+            )
+            is RuntimeMapEntryValueSnapshot -> DelegatedValue(
+                value = RuntimeMapEntry(
+                    key = restoreRuntimeValue(snapshot.key),
+                    value = restoreRuntimeValue(snapshot.value),
+                ),
+                fullClassName = "MapEntry",
+                typeArguments = listOf(
+                    runtimeDataType(snapshot.keyType),
+                    runtimeDataType(snapshot.valueType),
+                ),
+                symbolTable = symbolTable,
+            )
             else -> throw IllegalArgumentException("Unsupported runtime snapshot `${snapshot::class.simpleName}`")
         }
     }
@@ -349,4 +424,27 @@ class NarrativeStateSnapshotCodec(
     }
 
     private fun runtimeSymbolTable(): SymbolTable = runtimeInterpreter.symbolTable()
+}
+
+private class NarrativeSnapshotValueTable {
+    private val entries = mutableListOf<NarrativeValue>()
+
+    val values: Map<Int, NarrativeValue>
+        get() = entries.withIndex().associate { it.index to it.value }
+
+    fun reference(value: NarrativeValue): NarrativeValueReferenceSnapshot {
+        val index = entries.indexOfFirst { existing -> existing.hasSameSnapshotIdentityAs(value) }
+            .takeIf { it >= 0 }
+            ?: entries.size.also { entries += value }
+        return NarrativeValueReferenceSnapshot(index)
+    }
+
+    private fun NarrativeValue.hasSameSnapshotIdentityAs(other: NarrativeValue): Boolean {
+        return this === other || (
+            this is NarrativeValue.HostObject &&
+                other is NarrativeValue.HostObject &&
+                typeId == other.typeId &&
+                value === other.value
+            )
+    }
 }

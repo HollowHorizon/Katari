@@ -15,6 +15,8 @@ data class CustomFunctionDefinition(
      */
     val parameterTypes: List<CustomFunctionParameter>,
     val modifiers: Set<FunctionModifier> = emptySet(),
+    val inlineFunctionBody: String? = null,
+    val inlineFunctionBodyFormat: FunctionBodyFormat? = null,
 
     val executable: (interpreter: Interpreter, receiver: RuntimeValue?, args: List<RuntimeValue>, typeArgs: Map<String, DataType>) -> RuntimeValue,
 )
