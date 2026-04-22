@@ -1,14 +1,11 @@
 package ru.hollowhorizon.narrate
 
-import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceOptionSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeHost
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.ChoiceOptionSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Toolkit
-import java.awt.datatransfer.Clipboard
 import java.awt.datatransfer.StringSelection
 import java.io.File
 import javax.swing.BorderFactory

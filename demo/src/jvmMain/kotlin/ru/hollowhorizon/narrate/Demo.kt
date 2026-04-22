@@ -1,14 +1,14 @@
 package ru.hollowhorizon.narrate
 
-import com.sunnychung.lib.multiplatform.kotlite.narrative.KotliteNarrativeProgram
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBindings
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeInstance
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeProgram
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeStateSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeStateSnapshotCodec
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskState
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatus
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariNarrativeProgram
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariBindings
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariInstance
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariProgram
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariState
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariStateSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.StateSnapshotCodec
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskState
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -23,7 +23,7 @@ fun main() = runBlocking {
     val host = SwingNarrativeHost()
     val bindings = defaultBindings(host)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    val program = KotliteNarrativeProgram(
+    val program = KatariNarrativeProgram(
         filename = "<Narrative>",
         code = SwingNarrativeHost::class.java.getResource("/script.ktlite")!!.readText(),
         bindings = bindings,
@@ -48,7 +48,7 @@ fun main() = runBlocking {
         currentInstance === monitored
     }
 
-    fun replaceInstance(state: NarrativeState, clearTranscript: Boolean) {
+    fun replaceInstance(state: KatariState, clearTranscript: Boolean) {
         currentInstance.cancel()
         if (clearTranscript) {
             host.clearTranscript()
@@ -104,9 +104,9 @@ fun main() = runBlocking {
 
 private fun attachFailureMonitor(
     host: SwingNarrativeHost,
-    instance: NarrativeInstance,
+    instance: KatariInstance,
     scope: CoroutineScope,
-    isCurrentInstance: (NarrativeInstance) -> Boolean,
+    isCurrentInstance: (KatariInstance) -> Boolean,
 ) {
     scope.launch {
         instance.join()
@@ -114,7 +114,7 @@ private fun attachFailureMonitor(
             return@launch
         }
         val failedMessage = instance.currentState().tasks
-            .mapNotNull { (it.status as? NarrativeTaskStatus.Failed)?.message }
+            .mapNotNull { (it.status as? TaskStatus.Failed)?.message }
             .firstOrNull()
         if (failedMessage != null) {
             host.setStatus("Failed")
@@ -126,12 +126,12 @@ private fun attachFailureMonitor(
 }
 
 private fun createInstance(
-    program: NarrativeProgram,
-    initialState: NarrativeState,
-    bindings: NarrativeBindings,
+    program: KatariProgram,
+    initialState: KatariState,
+    bindings: KatariBindings,
     scope: CoroutineScope,
-): NarrativeInstance {
-    return NarrativeInstance(
+): KatariInstance {
+    return KatariInstance(
         program = program,
         initialState = initialState.copy(globals = bindings.globals),
         functionRegistry = bindings.functionRegistry,
@@ -140,42 +140,42 @@ private fun createInstance(
     )
 }
 
-private fun initialState(program: NarrativeProgram): NarrativeState {
-    return NarrativeState(
+private fun initialState(program: KatariProgram): KatariState {
+    return KatariState(
         programVersion = program.version,
-        tasks = listOf(NarrativeTaskState(id = program.entryTaskId)),
+        tasks = listOf(TaskState(id = program.entryTaskId)),
         globals = emptyMap(),
     )
 }
 
 private suspend fun saveJson(
-    instance: NarrativeInstance,
+    instance: KatariInstance,
     json: Json,
     file: File,
     host: SwingNarrativeHost,
 ) {
     saveSnapshot(instance, file, host, "Saved JSON: ${file.name}") { snapshot ->
-        file.writeText(json.encodeToString(NarrativeStateSnapshot.serializer(), snapshot))
+        file.writeText(json.encodeToString(KatariStateSnapshot.serializer(), snapshot))
     }
 }
 
 private suspend fun saveCbor(
-    instance: NarrativeInstance,
+    instance: KatariInstance,
     cbor: Cbor,
     file: File,
     host: SwingNarrativeHost,
 ) {
     saveSnapshot(instance, file, host, "Saved CBOR: ${file.name}") { snapshot ->
-        file.writeBytes(cbor.encodeToByteArray(NarrativeStateSnapshot.serializer(), snapshot))
+        file.writeBytes(cbor.encodeToByteArray(KatariStateSnapshot.serializer(), snapshot))
     }
 }
 
 private suspend fun saveSnapshot(
-    instance: NarrativeInstance,
+    instance: KatariInstance,
     file: File,
     host: SwingNarrativeHost,
     successMessage: String,
-    writer: (NarrativeStateSnapshot) -> Unit,
+    writer: (KatariStateSnapshot) -> Unit,
 ) {
     runCatching {
         host.setStatus("Saving ${file.name}...")
@@ -189,35 +189,35 @@ private suspend fun saveSnapshot(
 
 private suspend fun loadJson(
     file: File,
-    snapshotCodec: NarrativeStateSnapshotCodec,
+    snapshotCodec: StateSnapshotCodec,
     json: Json,
     host: SwingNarrativeHost,
-    onLoaded: (NarrativeState) -> Unit,
+    onLoaded: (KatariState) -> Unit,
 ) {
     loadSnapshot(file, snapshotCodec, host, "Loaded JSON: ${file.name}", onLoaded) {
-        json.decodeFromString(NarrativeStateSnapshot.serializer(), file.readText())
+        json.decodeFromString(KatariStateSnapshot.serializer(), file.readText())
     }
 }
 
 private suspend fun loadCbor(
     file: File,
-    snapshotCodec: NarrativeStateSnapshotCodec,
+    snapshotCodec: StateSnapshotCodec,
     cbor: Cbor,
     host: SwingNarrativeHost,
-    onLoaded: (NarrativeState) -> Unit,
+    onLoaded: (KatariState) -> Unit,
 ) {
     loadSnapshot(file, snapshotCodec, host, "Loaded CBOR: ${file.name}", onLoaded) {
-        cbor.decodeFromByteArray(NarrativeStateSnapshot.serializer(), file.readBytes())
+        cbor.decodeFromByteArray(KatariStateSnapshot.serializer(), file.readBytes())
     }
 }
 
 private suspend fun loadSnapshot(
     file: File,
-    snapshotCodec: NarrativeStateSnapshotCodec,
+    snapshotCodec: StateSnapshotCodec,
     host: SwingNarrativeHost,
     successMessage: String,
-    onLoaded: (NarrativeState) -> Unit,
-    reader: () -> NarrativeStateSnapshot,
+    onLoaded: (KatariState) -> Unit,
+    reader: () -> KatariStateSnapshot,
 ) {
     runCatching {
         host.setStatus("Loading ${file.name}...")

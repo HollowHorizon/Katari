@@ -1,4 +1,4 @@
-package com.sunnychung.lib.multiplatform.kotlite.narrative
+package com.sunnychung.lib.multiplatform.kotlite.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.Parser
 import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
@@ -17,7 +17,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
 import com.sunnychung.lib.multiplatform.kotlite.model.TokenType
 import com.sunnychung.lib.multiplatform.kotlite.model.UnaryOpNode
 
-class NarrativeParser(
+class KatariParser(
     lexer: Lexer,
 ) : Parser(lexer) {
 

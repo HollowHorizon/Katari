@@ -8,6 +8,7 @@ import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
 import com.sunnychung.lib.multiplatform.kotlite.model.BinaryOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IntegerNode
+import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.Token
 import com.sunnychung.lib.multiplatform.kotlite.model.TokenType
 import kotlin.test.Test
@@ -173,5 +174,13 @@ class ParserTest {
                 abc fun f()
             """.trimIndent()).script()
         }
+    }
+
+    @Test
+    fun unexpectedTokenDiagnosticDoesNotExposeTokenInternals() {
+        val error = UnexpectedTokenException(Token(TokenType.Integer, 1, SourcePosition("<Test>", 4, 10)))
+
+        assertEquals("[<Test>:4:10] Parse error: Unexpected integer `1`", error.message)
+        kotlin.test.assertTrue(!error.message!!.contains("Token(type="))
     }
 }

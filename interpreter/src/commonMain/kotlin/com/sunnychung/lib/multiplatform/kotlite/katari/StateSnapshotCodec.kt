@@ -1,4 +1,4 @@
-package com.sunnychung.lib.multiplatform.kotlite.narrative
+package com.sunnychung.lib.multiplatform.kotlite.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.KotliteInterpreter
 import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
@@ -22,10 +22,9 @@ import com.sunnychung.lib.multiplatform.kotlite.model.toTypeNode
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.plus
 import kotlinx.serialization.modules.polymorphic
-import kotlinx.serialization.modules.subclass
 
-class NarrativeStateSnapshotCodec(
-    private val valueCodecs: NarrativeValueCodecRegistry = NarrativeValueCodecRegistry(emptyList()),
+class StateSnapshotCodec(
+    private val valueCodecs: KatariValueCodecRegistry = KatariValueCodecRegistry(emptyList()),
     private val executionEnvironment: ExecutionEnvironment = ExecutionEnvironment(),
 ) {
     private val runtimeInterpreter by lazy {
@@ -36,10 +35,10 @@ class NarrativeStateSnapshotCodec(
         )
     }
 
-    fun serialize(state: NarrativeState): NarrativeStateSnapshot {
+    fun serialize(state: KatariState): KatariStateSnapshot {
         val valueTable = NarrativeSnapshotValueTable()
         val tasks = state.tasks.map { task ->
-            NarrativeTaskSnapshot(
+            TaskSnapshot(
                 id = task.id,
                 instructionPointer = task.instructionPointer,
                 variableRefs = if (task.callFrames.isEmpty()) {
@@ -48,7 +47,7 @@ class NarrativeStateSnapshotCodec(
                     emptyMap()
                 },
                 callFrames = task.callFrames.map { frame ->
-                    NarrativeCallFrameSnapshot(
+                    CallFrameSnapshot(
                         id = frame.id,
                         functionId = frame.functionId,
                         lexicalParentFrameId = frame.lexicalParentFrameId,
@@ -60,7 +59,7 @@ class NarrativeStateSnapshotCodec(
                 status = serializeStatus(task.status),
             )
         }
-        return NarrativeStateSnapshot(
+        return KatariStateSnapshot(
             programVersion = state.programVersion,
             tasks = tasks,
             values = valueTable.values.mapValues { (_, value) -> serializeValue(value) },
@@ -68,46 +67,32 @@ class NarrativeStateSnapshotCodec(
     }
 
     suspend fun restore(
-        snapshot: NarrativeStateSnapshot,
-        context: NarrativeValueRestoreContext = EmptyNarrativeValueRestoreContext,
-    ): NarrativeState {
-        val sharedValues = mutableMapOf<Int, NarrativeValue>()
+        snapshot: KatariStateSnapshot,
+        context: ValueRestoreContext = EmptyValueRestoreContext,
+    ): KatariState {
+        StateSnapshotValidator.validate(snapshot)
+        val sharedValues = mutableMapOf<Int, KatariValue>()
         snapshot.values.forEach { (id, value) ->
             sharedValues[id] = restoreValue(value, context)
         }
-        return NarrativeState(
+        return KatariState(
             programVersion = snapshot.programVersion,
             tasks = snapshot.tasks.map { task ->
-                val restoredValues = sharedValues.toMutableMap()
-                task.values.forEach { (id, value) ->
-                    restoredValues[id] = restoreValue(value, context)
-                }
-                suspend fun restoreVariables(
-                    refs: Map<String, NarrativeValueReferenceSnapshot>,
-                    legacyValues: Map<String, NarrativeValueSnapshot>,
-                ): Map<String, NarrativeValue> {
-                    if (refs.isNotEmpty()) {
-                        return refs.mapValues { (_, ref) ->
-                            restoredValues[ref.valueId]
-                                ?: throw IllegalArgumentException("Snapshot value `${ref.valueId}` is not defined")
-                        }
+                fun restoreVariables(refs: Map<String, ValueReferenceSnapshot>): Map<String, KatariValue> {
+                    return refs.mapValues { (_, ref) ->
+                        sharedValues.getValue(ref.valueId)
                     }
-                    val restored = mutableMapOf<String, NarrativeValue>()
-                    legacyValues.forEach { (name, value) ->
-                        restored[name] = restoreValue(value, context)
-                    }
-                    return restored
                 }
-                val restoredTaskLocals = restoreVariables(task.variableRefs, task.localVariables)
+                val restoredTaskLocals = restoreVariables(task.variableRefs)
                 val restoredFrames = task.callFrames.map { frame ->
-                    NarrativeCallFrameState(
+                    CallFrameState(
                         id = frame.id,
                         functionId = frame.functionId,
                         lexicalParentFrameId = frame.lexicalParentFrameId,
-                        localVariables = restoreVariables(frame.variableRefs, frame.localVariables),
+                        localVariables = restoreVariables(frame.variableRefs),
                     )
                 }
-                NarrativeTaskState(
+                TaskState(
                     id = task.id,
                     instructionPointer = task.instructionPointer,
                     localVariables = restoredFrames.lastOrNull()?.localVariables
@@ -123,21 +108,21 @@ class NarrativeStateSnapshotCodec(
 
     fun serializersModule(): SerializersModule {
         return valueCodecs.serializersModule() + SerializersModule {
-            polymorphic(NarrativeValueSnapshot::class) {
+            polymorphic(ValueSnapshot::class) {
                 subclass(ChoiceOptionValueSnapshot::class, ChoiceOptionValueSnapshot.serializer())
             }
         }
     }
 
-    private fun serializeValue(value: NarrativeValue): NarrativeValueSnapshot {
+    private fun serializeValue(value: KatariValue): ValueSnapshot {
         return when (value) {
-            NarrativeValue.Null -> NullValueSnapshot
-            is NarrativeValue.Bool -> BoolValueSnapshot(value.value)
-            is NarrativeValue.Int32 -> Int32ValueSnapshot(value.value)
-            is NarrativeValue.Float64 -> Float64ValueSnapshot(value.value)
-            is NarrativeValue.Text -> TextValueSnapshot(value.value)
-            is NarrativeValue.Lambda -> LambdaValueSnapshot(value.id)
-            is NarrativeValue.HostObject -> {
+            KatariValue.Null -> NullValueSnapshot
+            is KatariValue.Bool -> BoolValueSnapshot(value.value)
+            is KatariValue.Int32 -> Int32ValueSnapshot(value.value)
+            is KatariValue.Float64 -> Float64ValueSnapshot(value.value)
+            is KatariValue.Text -> TextValueSnapshot(value.value)
+            is KatariValue.Lambda -> LambdaValueSnapshot(value.id)
+            is KatariValue.HostObject -> {
                 if (value.typeId == CHOICE_OPTION_TYPE_ID) {
                     val option = value.value as? ChoiceOptionValue
                         ?: throw IllegalArgumentException(
@@ -154,7 +139,7 @@ class NarrativeStateSnapshotCodec(
                     serializeRuntimeValue(value.value)
                 } else {
                     @Suppress("UNCHECKED_CAST")
-                    (valueCodecs.codec(value.typeId) as NarrativeValueCodec<NarrativeValueSnapshot>)
+                    (valueCodecs.codec(value.typeId) as ValueCodec<ValueSnapshot>)
                         .serialize(value.value)
                 }
             }
@@ -162,17 +147,17 @@ class NarrativeStateSnapshotCodec(
     }
 
     private suspend fun restoreValue(
-        snapshot: NarrativeValueSnapshot,
-        context: NarrativeValueRestoreContext,
-    ): NarrativeValue {
+        snapshot: ValueSnapshot,
+        context: ValueRestoreContext,
+    ): KatariValue {
         return when (snapshot) {
-            NullValueSnapshot -> NarrativeValue.Null
-            is BoolValueSnapshot -> NarrativeValue.Bool(snapshot.value)
-            is Int32ValueSnapshot -> NarrativeValue.Int32(snapshot.value)
-            is Float64ValueSnapshot -> NarrativeValue.Float64(snapshot.value)
-            is TextValueSnapshot -> NarrativeValue.Text(snapshot.value)
-            is LambdaValueSnapshot -> NarrativeValue.Lambda(snapshot.id)
-            is ChoiceOptionValueSnapshot -> NarrativeValue.HostObject(
+            NullValueSnapshot -> KatariValue.Null
+            is BoolValueSnapshot -> KatariValue.Bool(snapshot.value)
+            is Int32ValueSnapshot -> KatariValue.Int32(snapshot.value)
+            is Float64ValueSnapshot -> KatariValue.Float64(snapshot.value)
+            is TextValueSnapshot -> KatariValue.Text(snapshot.value)
+            is LambdaValueSnapshot -> KatariValue.Lambda(snapshot.id)
+            is ChoiceOptionValueSnapshot -> KatariValue.HostObject(
                 typeId = CHOICE_OPTION_TYPE_ID,
                 value = ChoiceOptionValue(
                     id = snapshot.id,
@@ -182,29 +167,29 @@ class NarrativeStateSnapshotCodec(
                     disabledText = snapshot.disabledText,
                 )
             )
-            is RuntimeListValueSnapshot -> NarrativeValue.HostObject(
+            is RuntimeListValueSnapshot -> KatariValue.HostObject(
                 typeId = snapshot.typeId,
                 value = restoreRuntimeValue(snapshot),
             )
-            is RuntimeMapValueSnapshot -> NarrativeValue.HostObject(
+            is RuntimeMapValueSnapshot -> KatariValue.HostObject(
                 typeId = snapshot.typeId,
                 value = restoreRuntimeValue(snapshot),
             )
-            is RuntimePairValueSnapshot -> NarrativeValue.HostObject(
+            is RuntimePairValueSnapshot -> KatariValue.HostObject(
                 typeId = "Pair",
                 value = restoreRuntimeValue(snapshot),
             )
-            is RuntimeIteratorValueSnapshot -> NarrativeValue.HostObject(
+            is RuntimeIteratorValueSnapshot -> KatariValue.HostObject(
                 typeId = "Iterator",
                 value = restoreRuntimeValue(snapshot),
             )
-            is RuntimeMapEntryValueSnapshot -> NarrativeValue.HostObject(
+            is RuntimeMapEntryValueSnapshot -> KatariValue.HostObject(
                 typeId = "MapEntry",
                 value = restoreRuntimeValue(snapshot),
             )
             else -> {
                 val codec = valueCodecs.codec(snapshot)
-                NarrativeValue.HostObject(
+                KatariValue.HostObject(
                     typeId = codec.typeId,
                     value = codec.deserialize(snapshot, context),
                 )
@@ -212,69 +197,69 @@ class NarrativeStateSnapshotCodec(
         }
     }
 
-    private fun serializeSlot(slot: NarrativeSlotValue): NarrativeSlotSnapshot {
+    private fun serializeSlot(slot: SlotValue): SlotSnapshot {
         return when (slot) {
-            is NarrativeSlotValue.VariableReference -> NarrativeSlotSnapshot.VariableReference(
+            is SlotValue.VariableReference -> SlotSnapshot.VariableReference(
                 name = slot.name,
                 frameId = slot.frameId,
             )
         }
     }
 
-    private fun restoreSlot(slot: NarrativeSlotSnapshot): NarrativeSlotValue {
+    private fun restoreSlot(slot: SlotSnapshot): SlotValue {
         return when (slot) {
-            is NarrativeSlotSnapshot.VariableReference -> NarrativeSlotValue.VariableReference(
+            is SlotSnapshot.VariableReference -> SlotValue.VariableReference(
                 name = slot.name,
                 frameId = slot.frameId,
             )
         }
     }
 
-    private fun serializeStatus(status: NarrativeTaskStatus): NarrativeTaskStatusSnapshot {
+    private fun serializeStatus(status: TaskStatus): TaskStatusSnapshot {
         return when (status) {
-            NarrativeTaskStatus.Ready -> NarrativeTaskStatusSnapshot.Ready
-            is NarrativeTaskStatus.SuspendedCall -> NarrativeTaskStatusSnapshot.SuspendedCall(
+            TaskStatus.Ready -> TaskStatusSnapshot.Ready
+            is TaskStatus.SuspendedCall -> TaskStatusSnapshot.SuspendedCall(
                 resultTarget = serializeResultTarget(status.resultTarget),
                 nextInstructionPointer = status.nextInstructionPointer,
             )
-            is NarrativeTaskStatus.Failed -> NarrativeTaskStatusSnapshot.Failed(
+            is TaskStatus.Failed -> TaskStatusSnapshot.Failed(
                 message = status.message,
             )
-            NarrativeTaskStatus.Completed -> NarrativeTaskStatusSnapshot.Completed
+            TaskStatus.Completed -> TaskStatusSnapshot.Completed
         }
     }
 
-    private fun restoreStatus(status: NarrativeTaskStatusSnapshot): NarrativeTaskStatus {
+    private fun restoreStatus(status: TaskStatusSnapshot): TaskStatus {
         return when (status) {
-            NarrativeTaskStatusSnapshot.Ready -> NarrativeTaskStatus.Ready
-            is NarrativeTaskStatusSnapshot.SuspendedCall -> NarrativeTaskStatus.SuspendedCall(
+            TaskStatusSnapshot.Ready -> TaskStatus.Ready
+            is TaskStatusSnapshot.SuspendedCall -> TaskStatus.SuspendedCall(
                 resultTarget = restoreResultTarget(status.resultTarget),
                 nextInstructionPointer = status.nextInstructionPointer,
             )
-            is NarrativeTaskStatusSnapshot.Failed -> NarrativeTaskStatus.Failed(
+            is TaskStatusSnapshot.Failed -> TaskStatus.Failed(
                 message = status.message,
             )
-            NarrativeTaskStatusSnapshot.Completed -> NarrativeTaskStatus.Completed
+            TaskStatusSnapshot.Completed -> TaskStatus.Completed
         }
     }
 
-    private fun serializeResultTarget(target: NarrativeResultTarget?): NarrativeResultTargetSnapshot? {
+    private fun serializeResultTarget(target: ResultTarget?): ResultTargetSnapshot? {
         return when (target) {
             null -> null
-            is NarrativeResultTarget.Variable -> NarrativeResultTargetSnapshot.Variable(target.name)
-            is NarrativeResultTarget.Slot -> NarrativeResultTargetSnapshot.Slot(target.slot)
+            is ResultTarget.Variable -> ResultTargetSnapshot.Variable(target.name)
+            is ResultTarget.Slot -> ResultTargetSnapshot.Slot(target.slot)
         }
     }
 
-    private fun restoreResultTarget(target: NarrativeResultTargetSnapshot?): NarrativeResultTarget? {
+    private fun restoreResultTarget(target: ResultTargetSnapshot?): ResultTarget? {
         return when (target) {
             null -> null
-            is NarrativeResultTargetSnapshot.Variable -> NarrativeResultTarget.Variable(target.name)
-            is NarrativeResultTargetSnapshot.Slot -> NarrativeResultTarget.Slot(target.slot)
+            is ResultTargetSnapshot.Variable -> ResultTarget.Variable(target.name)
+            is ResultTargetSnapshot.Slot -> ResultTarget.Slot(target.slot)
         }
     }
 
-    private fun serializeRuntimeValue(value: RuntimeValue): NarrativeValueSnapshot {
+    private fun serializeRuntimeValue(value: RuntimeValue): ValueSnapshot {
         return when (value) {
             NullValue -> NullValueSnapshot
             is BooleanValue -> BoolValueSnapshot(value.value)
@@ -340,7 +325,7 @@ class NarrativeStateSnapshotCodec(
         }
     }
 
-    private fun restoreRuntimeValue(snapshot: NarrativeValueSnapshot): RuntimeValue {
+    private fun restoreRuntimeValue(snapshot: ValueSnapshot): RuntimeValue {
         val symbolTable = runtimeSymbolTable()
         return when (snapshot) {
             NullValueSnapshot -> NullValue
@@ -427,22 +412,22 @@ class NarrativeStateSnapshotCodec(
 }
 
 private class NarrativeSnapshotValueTable {
-    private val entries = mutableListOf<NarrativeValue>()
+    private val entries = mutableListOf<KatariValue>()
 
-    val values: Map<Int, NarrativeValue>
+    val values: Map<Int, KatariValue>
         get() = entries.withIndex().associate { it.index to it.value }
 
-    fun reference(value: NarrativeValue): NarrativeValueReferenceSnapshot {
+    fun reference(value: KatariValue): ValueReferenceSnapshot {
         val index = entries.indexOfFirst { existing -> existing.hasSameSnapshotIdentityAs(value) }
             .takeIf { it >= 0 }
             ?: entries.size.also { entries += value }
-        return NarrativeValueReferenceSnapshot(index)
+        return ValueReferenceSnapshot(index)
     }
 
-    private fun NarrativeValue.hasSameSnapshotIdentityAs(other: NarrativeValue): Boolean {
+    private fun KatariValue.hasSameSnapshotIdentityAs(other: KatariValue): Boolean {
         return this === other || (
-            this is NarrativeValue.HostObject &&
-                other is NarrativeValue.HostObject &&
+            this is KatariValue.HostObject &&
+                other is KatariValue.HostObject &&
                 typeId == other.typeId &&
                 value === other.value
             )

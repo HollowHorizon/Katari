@@ -1,13 +1,13 @@
 package ru.hollowhorizon.narrate
 
-import com.sunnychung.lib.multiplatform.kotlite.narrative.ImmediateNarrativeFunctionDefinition
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBindings
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBuiltinFunctions
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeHost
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValue
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueRestoreContext
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.toKotlite
+import com.sunnychung.lib.multiplatform.kotlite.katari.ImmediateKatariFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBindings
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValue
+import com.sunnychung.lib.multiplatform.kotlite.katari.ValueRestoreContext
+import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.toKatari
 import com.sunnychung.lib.multiplatform.kotlite.stdlib.AllStdLibModules
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -15,7 +15,7 @@ import kotlinx.serialization.Serializable
 data class NarrativeObject(val name: String, val age: Int, val weight: Double)
 
 fun defaultBindings(host: NarrativeHost) = NarrativeBindings {
-    val narrativeObjectType = NarrativeObject::class.toKotlite("narrative_object")
+    val narrativeObjectType = NarrativeObject::class.toKatari("narrative_object")
 
     install(AllStdLibModules())
     register(NarrativeBuiltinFunctions.definitions(host))
@@ -31,11 +31,11 @@ fun defaultBindings(host: NarrativeHost) = NarrativeBindings {
     )
 
     register(
-        ImmediateNarrativeFunctionDefinition(
+        ImmediateKatariFunctionDefinition(
             id = "NarrativeObject",
             execute = { arguments, _ ->
                 require(arguments.size == 3) { "`NarrativeObject` expects (name, age, weight)" }
-                NarrativeValue.HostObject(
+                KatariValue.HostObject(
                     typeId = narrativeObjectType.typeId,
                     value = NarrativeObject(
                         name = arguments[0].asText(),
@@ -54,30 +54,30 @@ data class NarrativeObjectSnapshot(
     val name: String,
     val age: Int,
     val weight: Double,
-) : NarrativeValueSnapshot()
+) : ValueSnapshot()
 
-private fun NarrativeValue.asText(): String {
+private fun KatariValue.asText(): String {
     return when (this) {
-        is NarrativeValue.Text -> value
+        is KatariValue.Text -> value
         else -> throw IllegalArgumentException("Expected text but got $this")
     }
 }
 
-private fun NarrativeValue.asInt(): Int {
+private fun KatariValue.asInt(): Int {
     return when (this) {
-        is NarrativeValue.Int32 -> value
+        is KatariValue.Int32 -> value
         else -> throw IllegalArgumentException("Expected int but got $this")
     }
 }
 
-private fun NarrativeValue.asDouble(): Double {
+private fun KatariValue.asDouble(): Double {
     return when (this) {
-        is NarrativeValue.Int32 -> value.toDouble()
-        is NarrativeValue.Float64 -> value
+        is KatariValue.Int32 -> value.toDouble()
+        is KatariValue.Float64 -> value
         else -> throw IllegalArgumentException("Expected numeric but got $this")
     }
 }
 
-private suspend fun NarrativeValueRestoreContext.awaitWorldReady() {
+private suspend fun ValueRestoreContext.awaitWorldReady() {
     // Demo stub: keep suspend point to illustrate async deserialization hook.
 }

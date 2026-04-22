@@ -1,4 +1,4 @@
-package com.sunnychung.lib.multiplatform.kotlite.narrative
+package com.sunnychung.lib.multiplatform.kotlite.katari
 
 interface NarrativeHost {
     fun narrate(text: String, resume: () -> Unit)
@@ -16,11 +16,11 @@ data object NarrativeNoOpHost : NarrativeHost {
 
 object NarrativeBuiltinFunctions {
 
-    fun registry(host: NarrativeHost): NarrativeFunctionRegistry {
-        return NarrativeFunctionRegistry(definitions(host))
+    fun registry(host: NarrativeHost): KatariFunctionRegistry {
+        return KatariFunctionRegistry(definitions(host))
     }
 
-    fun definitions(host: NarrativeHost): List<NarrativeFunctionDefinition> {
+    fun definitions(host: NarrativeHost): List<KatariFunctionDefinition> {
         return listOf(
             NarrateFunction(host),
             ChooseFunction(host),
@@ -31,51 +31,51 @@ object NarrativeBuiltinFunctions {
         )
     }
 
-    private class NarrateFunction(private val host: NarrativeHost) : NarrativeFunctionDefinition {
+    private class NarrateFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "narrate"
 
-        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
+        override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.size == 1) { "`narrate` expects a single text argument" }
-            return NarrativeFunctionResult.Suspended
+            return FunctionResult.Suspended
         }
 
         override suspend fun resumeCall(
-            arguments: List<NarrativeValue>,
-            response: NarrativeFunctionResponse?,
-            context: NarrativeFunctionContext,
-        ): NarrativeFunctionResult {
+            arguments: List<KatariValue>,
+            response: FunctionResponse?,
+            context: KatariFunctionContext,
+        ): FunctionResult {
             require(arguments.size == 1) { "`narrate` expects a single text argument" }
-            require(response == null || response == NarrativeFunctionResponse.Ack) {
+            require(response == null || response == FunctionResponse.Ack) {
                 "`narrate` only accepts acknowledgement"
             }
-            return NarrativeFunctionResult.Returned()
+            return FunctionResult.Returned()
         }
 
         override fun dispatch(
-            arguments: List<NarrativeValue>,
-            context: NarrativeFunctionDispatchContext,
-            resume: (NarrativeFunctionResponse?) -> Unit,
+            arguments: List<KatariValue>,
+            context: KatariFunctionDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
         ) {
             host.narrate(arguments.single().asStringCompatible()) {
-                resume(NarrativeFunctionResponse.Ack)
+                resume(FunctionResponse.Ack)
             }
         }
     }
 
-    private class ChooseFunction(private val host: NarrativeHost) : NarrativeFunctionDefinition {
+    private class ChooseFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "choose"
 
-        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
+        override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.isNotEmpty()) { "`choose` expects at least one option" }
-            return NarrativeFunctionResult.Suspended
+            return FunctionResult.Suspended
         }
 
         override suspend fun resumeCall(
-            arguments: List<NarrativeValue>,
-            response: NarrativeFunctionResponse?,
-            context: NarrativeFunctionContext,
-        ): NarrativeFunctionResult {
-            val selection = response as? NarrativeFunctionResponse.ChoiceSelection
+            arguments: List<KatariValue>,
+            response: FunctionResponse?,
+            context: KatariFunctionContext,
+        ): FunctionResult {
+            val selection = response as? FunctionResponse.ChoiceSelection
                 ?: throw IllegalArgumentException("`choose` expects a choice selection response")
             val options = arguments.toChoiceOptions(useTextAsId = true, includeDisabled = true)
                 .filter { it.enabled }
@@ -83,34 +83,34 @@ object NarrativeBuiltinFunctions {
             require(selection.optionId in options) {
                 "Unknown choice `${selection.optionId}`"
             }
-            return NarrativeFunctionResult.Returned(NarrativeValue.Text(selection.optionId))
+            return FunctionResult.Returned(KatariValue.Text(selection.optionId))
         }
 
         override fun dispatch(
-            arguments: List<NarrativeValue>,
-            context: NarrativeFunctionDispatchContext,
-            resume: (NarrativeFunctionResponse?) -> Unit,
+            arguments: List<KatariValue>,
+            context: KatariFunctionDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
         ) {
             host.choose(arguments.toChoiceOptions(useTextAsId = true, includeDisabled = true)) { optionId ->
-                resume(NarrativeFunctionResponse.ChoiceSelection(optionId))
+                resume(FunctionResponse.ChoiceSelection(optionId))
             }
         }
     }
 
-    private class ChooseIndexedFunction(private val host: NarrativeHost) : NarrativeFunctionDefinition {
+    private class ChooseIndexedFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "chooseIndexed"
 
-        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
+        override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.isNotEmpty()) { "`chooseIndexed` expects at least one option" }
-            return NarrativeFunctionResult.Suspended
+            return FunctionResult.Suspended
         }
 
         override suspend fun resumeCall(
-            arguments: List<NarrativeValue>,
-            response: NarrativeFunctionResponse?,
-            context: NarrativeFunctionContext,
-        ): NarrativeFunctionResult {
-            val selection = response as? NarrativeFunctionResponse.ChoiceSelection
+            arguments: List<KatariValue>,
+            response: FunctionResponse?,
+            context: KatariFunctionContext,
+        ): FunctionResult {
+            val selection = response as? FunctionResponse.ChoiceSelection
                 ?: throw IllegalArgumentException("`chooseIndexed` expects a choice selection response")
             val options = arguments.toChoiceOptionsWithSourceIndex(useTextAsId = true, includeDisabled = true)
             val selected = options.firstOrNull { indexed ->
@@ -119,65 +119,65 @@ object NarrativeBuiltinFunctions {
             require(selected != null) {
                 "Unknown choice `${selection.optionId}`"
             }
-            return NarrativeFunctionResult.Returned(NarrativeValue.Text(selected.sourceIndex.toString()))
+            return FunctionResult.Returned(KatariValue.Text(selected.sourceIndex.toString()))
         }
 
         override fun dispatch(
-            arguments: List<NarrativeValue>,
-            context: NarrativeFunctionDispatchContext,
-            resume: (NarrativeFunctionResponse?) -> Unit,
+            arguments: List<KatariValue>,
+            context: KatariFunctionDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
         ) {
             host.choose(arguments.toChoiceOptions(useTextAsId = true, includeDisabled = true)) { optionId ->
-                resume(NarrativeFunctionResponse.ChoiceSelection(optionId))
+                resume(FunctionResponse.ChoiceSelection(optionId))
             }
         }
     }
 
-    private class ChooseExhaustibleFunction(private val host: NarrativeHost) : NarrativeFunctionDefinition {
+    private class ChooseExhaustibleFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "chooseExhaustible"
 
-        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
-            require(arguments.any { it != NarrativeValue.Null }) { "`chooseExhaustible` expects at least one non-null option" }
-            return NarrativeFunctionResult.Suspended
+        override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
+            require(arguments.any { it != KatariValue.Null }) { "`chooseExhaustible` expects at least one non-null option" }
+            return FunctionResult.Suspended
         }
 
         override suspend fun resumeCall(
-            arguments: List<NarrativeValue>,
-            response: NarrativeFunctionResponse?,
-            context: NarrativeFunctionContext,
-        ): NarrativeFunctionResult {
-            val selection = response as? NarrativeFunctionResponse.ChoiceSelection
+            arguments: List<KatariValue>,
+            response: FunctionResponse?,
+            context: KatariFunctionContext,
+        ): FunctionResult {
+            val selection = response as? FunctionResponse.ChoiceSelection
                 ?: throw IllegalArgumentException("`chooseExhaustible` expects a choice selection response")
             val options = arguments.toChoiceOptions(useTextAsId = true, includeDisabled = false)
                 .map { it.id }
             require(selection.optionId in options) {
                 "Unknown choice `${selection.optionId}`"
             }
-            return NarrativeFunctionResult.Returned(NarrativeValue.Text(selection.optionId))
+            return FunctionResult.Returned(KatariValue.Text(selection.optionId))
         }
 
         override fun dispatch(
-            arguments: List<NarrativeValue>,
-            context: NarrativeFunctionDispatchContext,
-            resume: (NarrativeFunctionResponse?) -> Unit,
+            arguments: List<KatariValue>,
+            context: KatariFunctionDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
         ) {
             host.choose(arguments.toChoiceOptions(useTextAsId = true, includeDisabled = false)) { optionId ->
-                resume(NarrativeFunctionResponse.ChoiceSelection(optionId))
+                resume(FunctionResponse.ChoiceSelection(optionId))
             }
         }
     }
 
-    private data object ChoiceOptionFunction : NarrativeFunctionDefinition {
+    private data object ChoiceOptionFunction : KatariFunctionDefinition {
         override val id: String = "choiceOption"
 
-        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
+        override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.size == 4) { "`choiceOption` expects (text, visible, enabled, disabledTextOrNull)" }
             val text = arguments[0].asStringCompatible()
             val visible = arguments[1].asBoolean()
             val enabled = arguments[2].asBoolean()
             val disabledText = arguments[3].asNullableText()
-            return NarrativeFunctionResult.Returned(
-                NarrativeValue.HostObject(
+            return FunctionResult.Returned(
+                KatariValue.HostObject(
                     typeId = CHOICE_OPTION_TYPE_ID,
                     value = ChoiceOptionValue(
                         id = text,
@@ -191,45 +191,45 @@ object NarrativeBuiltinFunctions {
         }
 
         override suspend fun resumeCall(
-            arguments: List<NarrativeValue>,
-            response: NarrativeFunctionResponse?,
-            context: NarrativeFunctionContext,
-        ): NarrativeFunctionResult {
+            arguments: List<KatariValue>,
+            response: FunctionResponse?,
+            context: KatariFunctionContext,
+        ): FunctionResult {
             throw IllegalStateException("`choiceOption` cannot be resumed because it never suspends")
         }
 
         override fun dispatch(
-            arguments: List<NarrativeValue>,
-            context: NarrativeFunctionDispatchContext,
-            resume: (NarrativeFunctionResponse?) -> Unit,
+            arguments: List<KatariValue>,
+            context: KatariFunctionDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
         ) {
             throw IllegalStateException("`choiceOption` cannot be dispatched because it never suspends")
         }
     }
 
-    private class ReadLineFunction(private val host: NarrativeHost) : NarrativeFunctionDefinition {
+    private class ReadLineFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "readLine"
 
-        override suspend fun startCall(arguments: List<NarrativeValue>, context: NarrativeFunctionContext): NarrativeFunctionResult {
+        override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.size == 1) { "`readLine` expects a single text question argument" }
-            return NarrativeFunctionResult.Suspended
+            return FunctionResult.Suspended
         }
 
         override suspend fun resumeCall(
-            arguments: List<NarrativeValue>,
-            response: NarrativeFunctionResponse?,
-            context: NarrativeFunctionContext,
-        ): NarrativeFunctionResult {
+            arguments: List<KatariValue>,
+            response: FunctionResponse?,
+            context: KatariFunctionContext,
+        ): FunctionResult {
             require(arguments.size == 1) { "`readLine` expects a single text question argument" }
             val line = response as? NarrativeTextResponse
                 ?: throw IllegalArgumentException("`readLine` expects a text response")
-            return NarrativeFunctionResult.Returned(NarrativeValue.Text(line.text))
+            return FunctionResult.Returned(KatariValue.Text(line.text))
         }
 
         override fun dispatch(
-            arguments: List<NarrativeValue>,
-            context: NarrativeFunctionDispatchContext,
-            resume: (NarrativeFunctionResponse?) -> Unit,
+            arguments: List<KatariValue>,
+            context: KatariFunctionDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
         ) {
             host.readLine(arguments.single().asStringCompatible()) { line ->
                 resume(NarrativeTextResponse(line))
@@ -240,7 +240,7 @@ object NarrativeBuiltinFunctions {
 
 data class NarrativeTextResponse(
     val text: String,
-) : NarrativeFunctionResponse
+) : FunctionResponse
 
 internal const val CHOICE_OPTION_TYPE_ID = "__choice_option"
 
@@ -252,34 +252,34 @@ internal data class ChoiceOptionValue(
     val disabledText: String?,
 )
 
-private fun NarrativeValue.asStringCompatible(): String {
+private fun KatariValue.asStringCompatible(): String {
     return when (this) {
-        NarrativeValue.Null -> "null"
-        is NarrativeValue.Bool -> value.toString()
-        is NarrativeValue.Int32 -> value.toString()
-        is NarrativeValue.Float64 -> value.toString()
-        is NarrativeValue.Text -> value
-        is NarrativeValue.Lambda -> "Lambda($id)"
-        is NarrativeValue.HostObject -> value.toString()
+        KatariValue.Null -> "null"
+        is KatariValue.Bool -> value.toString()
+        is KatariValue.Int32 -> value.toString()
+        is KatariValue.Float64 -> value.toString()
+        is KatariValue.Text -> value
+        is KatariValue.Lambda -> "Lambda($id)"
+        is KatariValue.HostObject -> value.toString()
     }
 }
 
-private fun NarrativeValue.asBoolean(): Boolean {
+private fun KatariValue.asBoolean(): Boolean {
     return when (this) {
-        is NarrativeValue.Bool -> value
+        is KatariValue.Bool -> value
         else -> throw IllegalArgumentException("Expected boolean value but got $this")
     }
 }
 
-private fun NarrativeValue.asNullableText(): String? {
+private fun KatariValue.asNullableText(): String? {
     return when (this) {
-        NarrativeValue.Null -> null
-        is NarrativeValue.Text -> value
+        KatariValue.Null -> null
+        is KatariValue.Text -> value
         else -> throw IllegalArgumentException("Expected nullable text value but got $this")
     }
 }
 
-private fun List<NarrativeValue>.toChoiceOptions(
+private fun List<KatariValue>.toChoiceOptions(
     useTextAsId: Boolean,
     includeDisabled: Boolean,
 ): List<ChoiceOptionSnapshot> {
@@ -289,7 +289,7 @@ private fun List<NarrativeValue>.toChoiceOptions(
     ).map { it.option }
 }
 
-private fun List<NarrativeValue>.toChoiceOptionsWithSourceIndex(
+private fun List<KatariValue>.toChoiceOptionsWithSourceIndex(
     useTextAsId: Boolean,
     includeDisabled: Boolean,
 ): List<IndexedChoiceOptionSnapshot> {
@@ -302,11 +302,11 @@ private fun List<NarrativeValue>.toChoiceOptionsWithSourceIndex(
         if (predefinedOption != null) {
             return@mapIndexedNotNull IndexedChoiceOptionSnapshot(index, predefinedOption)
         }
-        if (value is NarrativeValue.HostObject && value.typeId == CHOICE_OPTION_TYPE_ID) {
+        if (value is KatariValue.HostObject && value.typeId == CHOICE_OPTION_TYPE_ID) {
             return@mapIndexedNotNull null
         }
         when (value) {
-            NarrativeValue.Null -> if (includeDisabled) {
+            KatariValue.Null -> if (includeDisabled) {
                 IndexedChoiceOptionSnapshot(
                     sourceIndex = index,
                     option = ChoiceOptionSnapshot(
@@ -335,12 +335,12 @@ private fun List<NarrativeValue>.toChoiceOptionsWithSourceIndex(
     }
 }
 
-private fun NarrativeValue.toChoiceOptionOrNull(
+private fun KatariValue.toChoiceOptionOrNull(
     useTextAsId: Boolean,
     index: Int,
     includeDisabled: Boolean,
 ): ChoiceOptionSnapshot? {
-    val hostValue = this as? NarrativeValue.HostObject ?: return null
+    val hostValue = this as? KatariValue.HostObject ?: return null
     if (hostValue.typeId != CHOICE_OPTION_TYPE_ID) return null
     val option = hostValue.value as? ChoiceOptionValue
         ?: throw IllegalArgumentException("Unexpected host value type for `$CHOICE_OPTION_TYPE_ID`")

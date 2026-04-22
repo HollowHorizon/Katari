@@ -1,27 +1,26 @@
-package com.sunnychung.lib.multiplatform.kotlite.test.narrative
+package com.sunnychung.lib.multiplatform.kotlite.test.katari
 
-import com.sunnychung.lib.multiplatform.kotlite.narrative.CallFunctionInstruction
-import com.sunnychung.lib.multiplatform.kotlite.narrative.ImmediateNarrativeFunctionDefinition
-import com.sunnychung.lib.multiplatform.kotlite.narrative.KotliteNarrativeProgram
-import com.sunnychung.lib.multiplatform.kotlite.narrative.LiteralExpression
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBindings
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionResponse
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeHost
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeInstance
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeProgram
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeResultTarget
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskState
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatus
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValue
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueRestoreContext
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBuiltinFunctions
-import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceOptionSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.SuspendableNarrativeFunctionDefinition
-import com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.toKotlite
+import com.sunnychung.lib.multiplatform.kotlite.katari.CallFunctionInstruction
+import com.sunnychung.lib.multiplatform.kotlite.katari.ImmediateKatariFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariNarrativeProgram
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBindings
+import com.sunnychung.lib.multiplatform.kotlite.katari.FunctionResponse
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariInstance
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariProgram
+import com.sunnychung.lib.multiplatform.kotlite.katari.ResultTarget
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariState
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskState
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatus
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValue
+import com.sunnychung.lib.multiplatform.kotlite.katari.ValueRestoreContext
+import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
+import com.sunnychung.lib.multiplatform.kotlite.katari.ChoiceOptionSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.SuspendableKatariFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.katari.toKatari
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
 import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
@@ -41,7 +40,7 @@ class NarrativeBindingsTest {
 
     @Test
     fun kClassToKotliteRegistersHostObjectAndCodecForSnapshots() = runTest {
-        val npcType = BindingTestNpcRef::class.toKotlite(typeId = "npc")
+        val npcType = BindingTestNpcRef::class.toKatari(typeId = "npc")
         val bindings = NarrativeBindings {
             registerHostType(
                 type = npcType,
@@ -52,10 +51,10 @@ class NarrativeBindingsTest {
             )
             global("npc", BindingTestNpcRef("npc-1"))
         }
-        val original = NarrativeState(
+        val original = KatariState(
             programVersion = 1,
             tasks = listOf(
-                NarrativeTaskState(
+                TaskState(
                     id = "main",
                     localVariables = mapOf("npc" to bindings.globals.getValue("npc")),
                 )
@@ -64,12 +63,11 @@ class NarrativeBindingsTest {
         )
 
         val snapshot = bindings.snapshotCodec.serialize(original)
-        val restored = bindings.snapshotCodec.restore(snapshot, object : NarrativeValueRestoreContext {})
-        val restoredNpc = assertIs<NarrativeValue.HostObject>(
+        val restored = bindings.snapshotCodec.restore(snapshot, object : ValueRestoreContext {})
+        val restoredNpc = assertIs<KatariValue.HostObject>(
             restored.tasks.single().localVariables.getValue("npc")
         ).value as BindingTestNpcRef
 
-        assertEquals(emptyMap(), snapshot.globals)
         assertEquals(emptyMap(), restored.globals)
         assertEquals("restored:npc-1", restoredNpc.id)
     }
@@ -78,26 +76,26 @@ class NarrativeBindingsTest {
     fun suspendableFunctionDefinitionResumesViaDispatchCallback() = runTest {
         val bindings = NarrativeBindings {
             register(
-                SuspendableNarrativeFunctionDefinition(
+                SuspendableKatariFunctionDefinition(
                     id = "promptFlag",
                     onDispatch = { _, _, resume -> resume(PromptFlagResponse(true)) },
-                    onResume = { _, response, _ -> NarrativeValue.Bool((response as PromptFlagResponse).enabled) },
+                    onResume = { _, response, _ -> KatariValue.Bool((response as PromptFlagResponse).enabled) },
                 )
             )
         }
-        val instance = NarrativeInstance(
-            program = NarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariProgram(
                 instructions = listOf(
                     CallFunctionInstruction(
                         functionId = "promptFlag",
                         arguments = emptyList(),
-                        resultTarget = NarrativeResultTarget.Variable("flag"),
+                        resultTarget = ResultTarget.Variable("flag"),
                     ),
                 )
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -110,8 +108,8 @@ class NarrativeBindingsTest {
         instance.join()
 
         val task = instance.currentState().tasks.single()
-        assertEquals(NarrativeTaskStatus.Completed, task.status)
-        assertEquals(NarrativeValue.Bool(true), task.localVariables.getValue("flag"))
+        assertEquals(TaskStatus.Completed, task.status)
+        assertEquals(KatariValue.Bool(true), task.localVariables.getValue("flag"))
     }
 
     @Test
@@ -119,26 +117,26 @@ class NarrativeBindingsTest {
         val events = mutableListOf<String>()
         val bindings = NarrativeBindings {
             register(
-                ImmediateNarrativeFunctionDefinition(
+                ImmediateKatariFunctionDefinition(
                     id = "append",
                     execute = { arguments, _ ->
-                        events += (arguments.single() as NarrativeValue.Text).value
-                        NarrativeValue.Null
+                        events += (arguments.single() as KatariValue.Text).value
+                        KatariValue.Null
                     }
                 )
             )
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     append("one")
                     append("two")
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -167,17 +165,17 @@ class NarrativeBindingsTest {
         val bindings = NarrativeBindings {
             register(NarrativeBuiltinFunctions.definitions(host))
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val weight = 2.345
                     "weight=${'$'}weight"
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -205,17 +203,17 @@ class NarrativeBindingsTest {
         }
         val bindings = NarrativeBindings {
             register(NarrativeBuiltinFunctions.definitions(host))
-            registerHostType(BindingNarrativeObject::class.toKotlite("binding_obj"))
+            registerHostType(BindingNarrativeObject::class.toKatari("binding_obj"))
             global("obj", BindingNarrativeObject("Test"))
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = "\"${'$'}obj\"",
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -233,7 +231,7 @@ class NarrativeBindingsTest {
     @Test
     fun suspendableMemberCanBeRegisteredForHostObjectAndCalledAsNavigation() = runTest {
         val bindings = NarrativeBindings {
-            val actorType = BindingActor::class.toKotlite("binding_actor")
+            val actorType = BindingActor::class.toKatari("binding_actor")
             registerHostType(actorType)
             registerSuspendableMember(
                 type = actorType,
@@ -243,21 +241,21 @@ class NarrativeBindingsTest {
                     resume(PromptFlagResponse(true))
                 },
                 onResume = { receiver, _, response, _ ->
-                    NarrativeValue.Bool(receiver.ready && (response as PromptFlagResponse).enabled)
+                    KatariValue.Bool(receiver.ready && (response as PromptFlagResponse).enabled)
                 },
             )
             global("actor", BindingActor())
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val ok = actor.awaitReady()
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -270,8 +268,8 @@ class NarrativeBindingsTest {
         instance.join()
 
         val task = instance.currentState().tasks.single()
-        assertEquals(NarrativeTaskStatus.Completed, task.status)
-        assertEquals(NarrativeValue.Bool(true), task.localVariables.getValue("ok"))
+        assertEquals(TaskStatus.Completed, task.status)
+        assertEquals(KatariValue.Bool(true), task.localVariables.getValue("ok"))
     }
 
     @Test
@@ -293,24 +291,24 @@ class NarrativeBindingsTest {
                     receiverType = null,
                     functionName = "shout",
                     returnType = "String",
-                    parameterTypes = listOf(com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter("value", "String")),
+                    parameterTypes = listOf(CustomFunctionParameter("value", "String")),
                     executable = { interpreter, _, args, _ ->
                         StringValue((args.single() as StringValue).value.uppercase(), interpreter.symbolTable())
                     },
                 )
             )
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val v = shout("hello")
                     "${'$'}v"
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -331,28 +329,28 @@ class NarrativeBindingsTest {
         val bindings = NarrativeBindings {
             install(AllStdLibModules())
             register(
-                ImmediateNarrativeFunctionDefinition(
+                ImmediateKatariFunctionDefinition(
                     id = "capture",
                     execute = { arguments, _ ->
-                        val value = assertIs<NarrativeValue.HostObject>(arguments.single()).value as RuntimeValue
+                        val value = assertIs<KatariValue.HostObject>(arguments.single()).value as RuntimeValue
                         val holder = assertIs<KotlinValueHolder<*>>(value)
                         val elements = assertIs<List<*>>(holder.value).map { assertIs<RuntimeValue>(it).convertToString() }
                         events += elements.joinToString(prefix = "[", postfix = "]")
-                        NarrativeValue.Null
+                        KatariValue.Null
                     }
                 )
             )
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     capture(listOf(1, 2, 3, 4, 5))
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -364,7 +362,7 @@ class NarrativeBindingsTest {
         advanceUntilIdle()
         instance.join()
 
-        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("[1, 2, 3, 4, 5]"), events)
     }
 
@@ -374,25 +372,25 @@ class NarrativeBindingsTest {
         val bindings = NarrativeBindings {
             install(AllStdLibModules())
             register(
-                ImmediateNarrativeFunctionDefinition(
+                ImmediateKatariFunctionDefinition(
                     id = "capture",
                     execute = { arguments, _ ->
                         events += when (val value = arguments.single()) {
-                            NarrativeValue.Null -> "null"
-                            is NarrativeValue.Bool -> value.value.toString()
-                            is NarrativeValue.Int32 -> value.value.toString()
-                            is NarrativeValue.Float64 -> value.value.toString()
-                            is NarrativeValue.Text -> value.value
-                            is NarrativeValue.Lambda -> "Lambda(${value.id})"
-                            is NarrativeValue.HostObject -> (value.value as RuntimeValue).convertToString()
+                            KatariValue.Null -> "null"
+                            is KatariValue.Bool -> value.value.toString()
+                            is KatariValue.Int32 -> value.value.toString()
+                            is KatariValue.Float64 -> value.value.toString()
+                            is KatariValue.Text -> value.value
+                            is KatariValue.Lambda -> "Lambda(${value.id})"
+                            is KatariValue.HostObject -> (value.value as RuntimeValue).convertToString()
                         }
-                        NarrativeValue.Null
+                        KatariValue.Null
                     }
                 )
             )
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val list = listOf(1, 2, 3, 4, 5)
@@ -401,9 +399,9 @@ class NarrativeBindingsTest {
                     capture(list.min())
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -415,7 +413,7 @@ class NarrativeBindingsTest {
         advanceUntilIdle()
         instance.join()
 
-        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("1", "5", "1"), events)
     }
 
@@ -425,34 +423,34 @@ class NarrativeBindingsTest {
         val bindings = NarrativeBindings {
             install(AllStdLibModules())
             register(
-                ImmediateNarrativeFunctionDefinition(
+                ImmediateKatariFunctionDefinition(
                     id = "capture",
                     execute = { arguments, _ ->
                         events += when (val value = arguments.single()) {
-                            NarrativeValue.Null -> "null"
-                            is NarrativeValue.Bool -> value.value.toString()
-                            is NarrativeValue.Int32 -> value.value.toString()
-                            is NarrativeValue.Float64 -> value.value.toString()
-                            is NarrativeValue.Text -> value.value
-                            is NarrativeValue.Lambda -> "Lambda(${value.id})"
-                            is NarrativeValue.HostObject -> (value.value as RuntimeValue).convertToString()
+                            KatariValue.Null -> "null"
+                            is KatariValue.Bool -> value.value.toString()
+                            is KatariValue.Int32 -> value.value.toString()
+                            is KatariValue.Float64 -> value.value.toString()
+                            is KatariValue.Text -> value.value
+                            is KatariValue.Lambda -> "Lambda(${value.id})"
+                            is KatariValue.HostObject -> (value.value as RuntimeValue).convertToString()
                         }
-                        NarrativeValue.Null
+                        KatariValue.Null
                     }
                 )
             )
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val map = mapOf("hello" to 5)
                     capture(map["hello"])
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -464,7 +462,7 @@ class NarrativeBindingsTest {
         advanceUntilIdle()
         instance.join()
 
-        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("5"), events)
     }
 
@@ -473,8 +471,8 @@ class NarrativeBindingsTest {
         val bindings = NarrativeBindings {
             install(AllStdLibModules())
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val list = listOf(1, 2, 3)
@@ -482,9 +480,9 @@ class NarrativeBindingsTest {
                     "ok"
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -498,8 +496,8 @@ class NarrativeBindingsTest {
 
         val restored = bindings.snapshotCodec.restore(instance.serializeState())
         val locals = restored.tasks.single().localVariables
-        val list = assertIs<NarrativeValue.HostObject>(locals.getValue("list")).value as RuntimeValue
-        val map = assertIs<NarrativeValue.HostObject>(locals.getValue("map")).value as RuntimeValue
+        val list = assertIs<KatariValue.HostObject>(locals.getValue("list")).value as RuntimeValue
+        val map = assertIs<KatariValue.HostObject>(locals.getValue("map")).value as RuntimeValue
 
         assertEquals("List", list.type().name)
         assertEquals("Map", map.type().name)
@@ -512,25 +510,25 @@ class NarrativeBindingsTest {
         val bindings = NarrativeBindings {
             install(AllStdLibModules())
             register(
-                ImmediateNarrativeFunctionDefinition(
+                ImmediateKatariFunctionDefinition(
                     id = "capture",
                     execute = { arguments, _ ->
                         events += when (val value = arguments.single()) {
-                            NarrativeValue.Null -> "null"
-                            is NarrativeValue.Bool -> value.value.toString()
-                            is NarrativeValue.Int32 -> value.value.toString()
-                            is NarrativeValue.Float64 -> value.value.toString()
-                            is NarrativeValue.Text -> value.value
-                            is NarrativeValue.Lambda -> "Lambda(${value.id})"
-                            is NarrativeValue.HostObject -> (value.value as RuntimeValue).convertToString()
+                            KatariValue.Null -> "null"
+                            is KatariValue.Bool -> value.value.toString()
+                            is KatariValue.Int32 -> value.value.toString()
+                            is KatariValue.Float64 -> value.value.toString()
+                            is KatariValue.Text -> value.value
+                            is KatariValue.Lambda -> "Lambda(${value.id})"
+                            is KatariValue.HostObject -> (value.value as RuntimeValue).convertToString()
                         }
-                        NarrativeValue.Null
+                        KatariValue.Null
                     }
                 )
             )
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val list = mutableListOf(1, 2, 3)
@@ -541,9 +539,9 @@ class NarrativeBindingsTest {
                     capture(map["hello"])
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -555,7 +553,7 @@ class NarrativeBindingsTest {
         advanceUntilIdle()
         instance.join()
 
-        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("42", "7"), events)
     }
 
@@ -573,8 +571,8 @@ class NarrativeBindingsTest {
         val bindings = NarrativeBindings {
             register(NarrativeBuiltinFunctions.definitions(host))
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     operator fun String.set(index: String, value: Int): String {
@@ -584,9 +582,9 @@ class NarrativeBindingsTest {
                     "Так, ну допустим"["И вот это"] = 1
                 """.trimIndent().replace("${ '$' }", "$"),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
             functionRegistry = bindings.functionRegistry,
@@ -598,7 +596,7 @@ class NarrativeBindingsTest {
         advanceUntilIdle()
         instance.join()
 
-        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("Так, ну допустим: И вот это (1)"), events)
     }
 }
@@ -607,7 +605,7 @@ class NarrativeBindingsTest {
 @SerialName("test_npc")
 data class TestNpcValueSnapshot(
     val id: String,
-) : NarrativeValueSnapshot()
+) : ValueSnapshot()
 
 data class BindingTestNpcRef(val id: String)
 
@@ -615,6 +613,6 @@ data class BindingNarrativeObject(val name: String)
 
 data class BindingActor(var ready: Boolean = false)
 
-data class PromptFlagResponse(val enabled: Boolean) : NarrativeFunctionResponse
+data class PromptFlagResponse(val enabled: Boolean) : FunctionResponse
 
 

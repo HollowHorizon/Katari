@@ -1,37 +1,42 @@
-package com.sunnychung.lib.multiplatform.kotlite.test.narrative
+package com.sunnychung.lib.multiplatform.kotlite.test.katari
 
-import com.sunnychung.lib.multiplatform.kotlite.narrative.CallFunctionInstruction
-import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceOptionSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.KotliteNarrativeProgram
-import com.sunnychung.lib.multiplatform.kotlite.narrative.LiteralExpression
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBuiltinFunctions
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionContext
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionDefinition
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionDispatchContext
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionRegistry
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionResponse
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeFunctionResult
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeHost
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeInstance
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeNoOpHost
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeProgram
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeStateSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeStateSnapshotCodec
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeResultTarget
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeSlotSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeSlotValue
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskState
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatus
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValue
-import com.sunnychung.lib.multiplatform.kotlite.narrative.LambdaValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueCodec
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueCodecRegistry
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueRestoreContext
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.SetResultInstruction
-import com.sunnychung.lib.multiplatform.kotlite.narrative.VariableExpression
-import com.sunnychung.lib.multiplatform.kotlite.narrative.ROOT_CALL_FRAME_ID
+import com.sunnychung.lib.multiplatform.kotlite.katari.CallFunctionInstruction
+import com.sunnychung.lib.multiplatform.kotlite.katari.ChoiceOptionSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariNarrativeProgram
+import com.sunnychung.lib.multiplatform.kotlite.katari.LiteralExpression
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionContext
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionDispatchContext
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionRegistry
+import com.sunnychung.lib.multiplatform.kotlite.katari.FunctionResponse
+import com.sunnychung.lib.multiplatform.kotlite.katari.FunctionResult
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariInstance
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeNoOpHost
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariProgram
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariState
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariStateSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.StateSnapshotCodec
+import com.sunnychung.lib.multiplatform.kotlite.katari.StateSnapshotValidationException
+import com.sunnychung.lib.multiplatform.kotlite.katari.ResultTarget
+import com.sunnychung.lib.multiplatform.kotlite.katari.SlotSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.SlotValue
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskState
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatus
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatusSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValue
+import com.sunnychung.lib.multiplatform.kotlite.katari.LambdaValueSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.ValueCodec
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValueCodecRegistry
+import com.sunnychung.lib.multiplatform.kotlite.katari.ValueReferenceSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.ValueRestoreContext
+import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.SetResultInstruction
+import com.sunnychung.lib.multiplatform.kotlite.katari.TextValueSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.VariableExpression
+import com.sunnychung.lib.multiplatform.kotlite.katari.ROOT_CALL_FRAME_ID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -48,7 +53,7 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
-class NarrativeInstanceTest {
+class KatariInstanceTest {
 
     @Test
     fun instanceRunsBuiltinNarrateThroughHostCallback() = runTest {
@@ -65,16 +70,16 @@ class NarrativeInstanceTest {
 
             override fun readLine(question: String, resume: (String) -> Unit) = error("readLine should not be called")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     "Narration"
                 """.trimIndent(),
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
             ),
             functionRegistry = NarrativeBuiltinFunctions.registry(host),
             coroutineScope = this,
@@ -85,7 +90,7 @@ class NarrativeInstanceTest {
         instance.join()
 
         assertEquals(listOf("narrate:Narration"), events)
-        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
     }
 
     @Test
@@ -104,16 +109,16 @@ class NarrativeInstanceTest {
 
             override fun readLine(question: String, resume: (String) -> Unit) = error("readLine should not be called")
         }
-        val instance = NarrativeInstance(
-            program = NarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariProgram(
                 instructions = listOf(
                     CallFunctionInstruction(
                         functionId = "choose",
                         arguments = listOf(
-                            LiteralExpression(NarrativeValue.Text("One")),
-                            LiteralExpression(NarrativeValue.Text("Two")),
+                            LiteralExpression(KatariValue.Text("One")),
+                            LiteralExpression(KatariValue.Text("Two")),
                         ),
-                        resultTarget = NarrativeResultTarget.Slot(0),
+                        resultTarget = ResultTarget.Slot(0),
                     ),
                 )
             ),
@@ -127,7 +132,7 @@ class NarrativeInstanceTest {
 
         assertEquals("Two", chosen.await())
         assertEquals(
-            NarrativeSlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID),
+            SlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID),
             instance.currentState().tasks.single().slots.getValue(0)
         )
     }
@@ -144,16 +149,16 @@ class NarrativeInstanceTest {
                 resume(options.single().id)
             }
         }
-        val instance = NarrativeInstance(
-            program = NarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariProgram(
                 instructions = listOf(
                     CallFunctionInstruction(
                         functionId = "chooseExhaustible",
                         arguments = listOf(
-                            LiteralExpression(NarrativeValue.Null),
-                            LiteralExpression(NarrativeValue.Text("Visible")),
+                            LiteralExpression(KatariValue.Null),
+                            LiteralExpression(KatariValue.Text("Visible")),
                         ),
-                        resultTarget = NarrativeResultTarget.Variable("answer"),
+                        resultTarget = ResultTarget.Variable("answer"),
                     ),
                 )
             ),
@@ -167,7 +172,7 @@ class NarrativeInstanceTest {
 
         assertEquals(1, seenOptions.single().size)
         assertEquals("Visible", seenOptions.single().single().text)
-        assertEquals(NarrativeValue.Text("Visible"), instance.currentState().tasks.single().localVariables.getValue("answer"))
+        assertEquals(KatariValue.Text("Visible"), instance.currentState().tasks.single().localVariables.getValue("answer"))
     }
 
     @Test
@@ -180,9 +185,9 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val codec = NarrativeStateSnapshotCodec()
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram("<Narrative>", "\"Hello\""),
+        val codec = StateSnapshotCodec()
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram("<Narrative>", "\"Hello\""),
             functionRegistry = NarrativeBuiltinFunctions.registry(host),
             snapshotCodec = codec,
             coroutineScope = this,
@@ -192,7 +197,7 @@ class NarrativeInstanceTest {
         advanceUntilIdle()
         val snapshot = instance.serializeState()
         val status = snapshot.tasks.single().status
-        assertIs<com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatusSnapshot.SuspendedCall>(status)
+        assertIs<TaskStatusSnapshot.SuspendedCall>(status)
 
         pendingResume!!.invoke()
         advanceUntilIdle()
@@ -208,9 +213,9 @@ class NarrativeInstanceTest {
                 // Intentionally do not resume to keep the task suspended.
             }
         }
-        val codec = NarrativeStateSnapshotCodec()
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val codec = StateSnapshotCodec()
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var money = 0
@@ -234,28 +239,28 @@ class NarrativeInstanceTest {
             classDiscriminator = "kind"
         }
         val decoded = json.decodeFromString(
-            NarrativeStateSnapshot.serializer(),
-            json.encodeToString(NarrativeStateSnapshot.serializer(), snapshot),
+            KatariStateSnapshot.serializer(),
+            json.encodeToString(KatariStateSnapshot.serializer(), snapshot),
         )
         val restored = codec.restore(decoded)
 
-        assertIs<com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatus.SuspendedCall>(
+        assertIs<TaskStatus.SuspendedCall>(
             restored.tasks.single().status
         )
     }
 
     @Test
     fun snapshotRoundTripRestoresStateAndJson() = runTest {
-        val codec = NarrativeStateSnapshotCodec()
-        val original = com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState(
+        val codec = StateSnapshotCodec()
+        val original = KatariState(
             programVersion = 1,
             tasks = listOf(
-                NarrativeTaskState(
+                TaskState(
                     id = "main",
                     instructionPointer = 2,
                     localVariables = emptyMap(),
                     slots = emptyMap(),
-                    status = NarrativeTaskStatus.SuspendedCall(
+                    status = TaskStatus.SuspendedCall(
                         resultTarget = null,
                         nextInstructionPointer = 2,
                     ),
@@ -268,8 +273,8 @@ class NarrativeInstanceTest {
             classDiscriminator = "kind"
         }
         val decoded = json.decodeFromString(
-            NarrativeStateSnapshot.serializer(),
-            json.encodeToString(NarrativeStateSnapshot.serializer(), snapshot),
+            KatariStateSnapshot.serializer(),
+            json.encodeToString(KatariStateSnapshot.serializer(), snapshot),
         )
 
         assertEquals(original, codec.restore(decoded))
@@ -277,22 +282,22 @@ class NarrativeInstanceTest {
 
     @Test
     fun slotReferencesVariableInsteadOfDuplicatingValueInSnapshot() = runTest {
-        val codec = NarrativeStateSnapshotCodec()
-        val instance = NarrativeInstance(
-            program = NarrativeProgram(
+        val codec = StateSnapshotCodec()
+        val instance = KatariInstance(
+            program = KatariProgram(
                 instructions = listOf(
                     SetResultInstruction(
-                        target = NarrativeResultTarget.Slot(0),
+                        target = ResultTarget.Slot(0),
                         expression = VariableExpression("name"),
                     ),
                 )
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
                 tasks = listOf(
-                    NarrativeTaskState(
+                    TaskState(
                         id = "main",
-                        localVariables = mapOf("name" to NarrativeValue.Text("Igor")),
+                        localVariables = mapOf("name" to KatariValue.Text("Igor")),
                     )
                 ),
             ),
@@ -307,24 +312,24 @@ class NarrativeInstanceTest {
         val snapshot = instance.serializeState()
         val restored = codec.restore(snapshot)
 
-        assertEquals(NarrativeSlotValue.VariableReference("name", frameId = ROOT_CALL_FRAME_ID), state.slots.getValue(0))
-        assertEquals(NarrativeSlotSnapshot.VariableReference("name", frameId = ROOT_CALL_FRAME_ID), snapshot.tasks.single().slots.getValue(0))
-        assertEquals(NarrativeSlotValue.VariableReference("name", frameId = ROOT_CALL_FRAME_ID), restored.tasks.single().slots.getValue(0))
+        assertEquals(SlotValue.VariableReference("name", frameId = ROOT_CALL_FRAME_ID), state.slots.getValue(0))
+        assertEquals(SlotSnapshot.VariableReference("name", frameId = ROOT_CALL_FRAME_ID), snapshot.tasks.single().slots.getValue(0))
+        assertEquals(SlotValue.VariableReference("name", frameId = ROOT_CALL_FRAME_ID), restored.tasks.single().slots.getValue(0))
     }
 
     @Test
     fun functionResultStoredInSlotUsesInternalVariableReferenceInSnapshot() = runTest {
-        val codec = NarrativeStateSnapshotCodec()
-        val instance = NarrativeInstance(
-            program = NarrativeProgram(
+        val codec = StateSnapshotCodec()
+        val instance = KatariInstance(
+            program = KatariProgram(
                 instructions = listOf(
                     CallFunctionInstruction(
                         functionId = "choose",
                         arguments = listOf(
-                            LiteralExpression(NarrativeValue.Text("ivan")),
-                            LiteralExpression(NarrativeValue.Text("petr")),
+                            LiteralExpression(KatariValue.Text("ivan")),
+                            LiteralExpression(KatariValue.Text("petr")),
                         ),
-                        resultTarget = NarrativeResultTarget.Slot(0),
+                        resultTarget = ResultTarget.Slot(0),
                     ),
                 )
             ),
@@ -349,41 +354,41 @@ class NarrativeInstanceTest {
         val slot = task.slots.getValue(0)
         val snapshotSlot = snapshot.tasks.single().slots.getValue(0)
 
-        assertEquals(NarrativeSlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID), slot)
-        assertEquals(NarrativeValue.Text("ivan"), task.localVariables.getValue("__narrative_slot_0"))
-        assertEquals(NarrativeSlotSnapshot.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID), snapshotSlot)
+        assertEquals(SlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID), slot)
+        assertEquals(KatariValue.Text("ivan"), task.localVariables.getValue("__narrative_slot_0"))
+        assertEquals(SlotSnapshot.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID), snapshotSlot)
     }
 
     @Test
     fun cancellingInstanceDoesNotCancelExternallyProvidedScope() = runTest {
-        val instance = NarrativeInstance(
-            program = NarrativeProgram(emptyList()),
+        val instance = KatariInstance(
+            program = KatariProgram(emptyList()),
             coroutineScope = this,
         )
 
         instance.cancel()
 
-        val second = NarrativeInstance(
-            program = NarrativeProgram(emptyList()),
+        val second = KatariInstance(
+            program = KatariProgram(emptyList()),
             coroutineScope = this,
         )
         second.start()
         advanceUntilIdle()
 
-        assertEquals(NarrativeTaskStatus.Completed, second.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, second.currentState().tasks.single().status)
     }
 
     @Test
     fun snapshotFailsForExternalValueWithoutCodec() = runTest {
-        val codec = NarrativeStateSnapshotCodec()
-        val instance = NarrativeInstance(
-            program = NarrativeProgram(emptyList()),
-            initialState = com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState(
+        val codec = StateSnapshotCodec()
+        val instance = KatariInstance(
+            program = KatariProgram(emptyList()),
+            initialState = KatariState(
                 programVersion = 1,
                 tasks = listOf(
-                    NarrativeTaskState(
+                    TaskState(
                         id = "main",
-                        localVariables = mapOf("npc" to NarrativeValue.HostObject("npc", "npc-1")),
+                        localVariables = mapOf("npc" to KatariValue.HostObject("npc", "npc-1")),
                     )
                 ),
             ),
@@ -398,16 +403,16 @@ class NarrativeInstanceTest {
 
     @Test
     fun externalValueRestoreUsesSuspendDeserializer() = runTest {
-        val valueRegistry = NarrativeValueCodecRegistry(listOf(TestNpcCodec()))
-        val codec = NarrativeStateSnapshotCodec(valueCodecs = valueRegistry)
-        val original = com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState(
+        val valueRegistry = KatariValueCodecRegistry(listOf(TestNpcCodec()))
+        val codec = StateSnapshotCodec(valueCodecs = valueRegistry)
+        val original = KatariState(
             programVersion = 1,
             tasks = listOf(
-                NarrativeTaskState(
+                TaskState(
                     id = "main",
                     instructionPointer = 0,
-                    localVariables = mapOf("speaker" to NarrativeValue.HostObject("npc", TestNpcRef("npc-2"))),
-                    status = NarrativeTaskStatus.Ready,
+                    localVariables = mapOf("speaker" to KatariValue.HostObject("npc", TestNpcRef("npc-2"))),
+                    status = TaskStatus.Ready,
                 )
             ),
         )
@@ -419,43 +424,42 @@ class NarrativeInstanceTest {
         }
         val restored = codec.restore(
             json.decodeFromString(
-                NarrativeStateSnapshot.serializer(),
-                json.encodeToString(NarrativeStateSnapshot.serializer(), snapshot),
+                KatariStateSnapshot.serializer(),
+                json.encodeToString(KatariStateSnapshot.serializer(), snapshot),
             ),
             TestRestoreContext,
         )
 
-        assertEquals(emptyMap(), snapshot.globals)
         assertEquals(emptyMap(), restored.globals)
-        assertEquals(TestNpcRef("restored:npc-2"), assertIs<NarrativeValue.HostObject>(restored.tasks.single().localVariables.getValue("speaker")).value)
+        assertEquals(TestNpcRef("restored:npc-2"), assertIs<KatariValue.HostObject>(restored.tasks.single().localVariables.getValue("speaker")).value)
     }
 
     @Test
     fun snapshotPreservesSharedValuesAcrossTasks() = runTest {
-        val codec = NarrativeStateSnapshotCodec(
-            valueCodecs = NarrativeValueCodecRegistry(listOf(TestNpcCodec())),
+        val codec = StateSnapshotCodec(
+            valueCodecs = KatariValueCodecRegistry(listOf(TestNpcCodec())),
         )
         val npc = TestNpcRef("npc-1")
-        val original = NarrativeState(
+        val original = KatariState(
             programVersion = 1,
             tasks = listOf(
-                NarrativeTaskState(
+                TaskState(
                     id = "main",
-                    localVariables = mapOf("npc" to NarrativeValue.HostObject("npc", npc)),
+                    localVariables = mapOf("npc" to KatariValue.HostObject("npc", npc)),
                 ),
-                NarrativeTaskState(
+                TaskState(
                     id = "side",
-                    localVariables = mapOf("npc" to NarrativeValue.HostObject("npc", npc)),
+                    localVariables = mapOf("npc" to KatariValue.HostObject("npc", npc)),
                 ),
             ),
         )
 
         val snapshot = codec.serialize(original)
         val restored = codec.restore(snapshot, TestRestoreContext)
-        val mainNpc = assertIs<NarrativeValue.HostObject>(
+        val mainNpc = assertIs<KatariValue.HostObject>(
             restored.tasks.first { it.id == "main" }.localVariables.getValue("npc")
         ).value
-        val sideNpc = assertIs<NarrativeValue.HostObject>(
+        val sideNpc = assertIs<KatariValue.HostObject>(
             restored.tasks.first { it.id == "side" }.localVariables.getValue("npc")
         ).value
 
@@ -469,19 +473,19 @@ class NarrativeInstanceTest {
 
     @Test
     fun customSuspendableFunctionResumesItselfThroughDispatchCallback() = runTest {
-        val functionRegistry = NarrativeFunctionRegistry(
+        val functionRegistry = KatariFunctionRegistry(
             listOf(
                 *builtinFunctionDefinitions(),
                 PromptFlagFunction,
             )
         )
-        val instance = NarrativeInstance(
-            program = NarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariProgram(
                 instructions = listOf(
                     CallFunctionInstruction(
                         functionId = "promptFlag",
-                        arguments = listOf(LiteralExpression(NarrativeValue.Text("Enable?"))),
-                        resultTarget = NarrativeResultTarget.Slot(0),
+                        arguments = listOf(LiteralExpression(KatariValue.Text("Enable?"))),
+                        resultTarget = ResultTarget.Slot(0),
                     ),
                 )
             ),
@@ -494,7 +498,7 @@ class NarrativeInstanceTest {
         instance.join()
 
         assertEquals(
-            NarrativeSlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID),
+            SlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID),
             instance.currentState().tasks.single().slots.getValue(0)
         )
     }
@@ -510,8 +514,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var i = 0
@@ -543,8 +547,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var unlocked = false
@@ -579,8 +583,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var i = 1
@@ -617,8 +621,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var i = 0
@@ -663,8 +667,8 @@ class NarrativeInstanceTest {
                 resume("Igor")
             }
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val name = readLine("What is your name?")
@@ -684,16 +688,16 @@ class NarrativeInstanceTest {
 
         val task = instance.currentState().tasks.single()
         assertEquals(listOf("Matched"), events)
-        assertEquals(NarrativeValue.Text("Igor"), task.localVariables.getValue("name"))
-        assertEquals(NarrativeValue.Text("Leave"), task.localVariables.getValue("action"))
+        assertEquals(KatariValue.Text("Igor"), task.localVariables.getValue("name"))
+        assertEquals(KatariValue.Text("Leave"), task.localVariables.getValue("action"))
         assertEquals(0, task.slots.size)
         kotlin.test.assertTrue(task.localVariables.keys.none { it.startsWith("__narrative_slot_") })
     }
 
     @Test
     fun runtimeMarksTaskAsFailedAndJoinCompletesOnExecutionError() = runTest {
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     unknownFunction()
@@ -709,14 +713,14 @@ class NarrativeInstanceTest {
         instance.join()
 
         val status = instance.currentState().tasks.single().status
-        val failed = assertIs<NarrativeTaskStatus.Failed>(status)
+        val failed = assertIs<TaskStatus.Failed>(status)
         assertTrue(failed.message.contains("No narrative function is registered for id `unknownFunction`"))
     }
 
     @Test
     fun runtimeErrorInsideIfConditionUsesVariableExpressionColumn() = runTest {
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     fun check() {
@@ -736,7 +740,7 @@ class NarrativeInstanceTest {
         instance.join()
 
         val status = instance.currentState().tasks.single().status
-        val failed = assertIs<NarrativeTaskStatus.Failed>(status)
+        val failed = assertIs<TaskStatus.Failed>(status)
         assertTrue(failed.message.contains("[<Narrative>:2:9]"))
         assertTrue(failed.message.contains("Variable `money` is not defined"))
     }
@@ -752,8 +756,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     fun greet() {
@@ -772,7 +776,7 @@ class NarrativeInstanceTest {
         instance.join()
 
         assertEquals(listOf("Hello"), events)
-        assertEquals(NarrativeTaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
     }
 
     @Test
@@ -786,8 +790,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     fun add(a: Int, b: Int): Int {
@@ -808,7 +812,7 @@ class NarrativeInstanceTest {
 
         val task = instance.currentState().tasks.single()
         assertEquals(listOf("sum=5"), events)
-        assertEquals(NarrativeValue.Int32(5), task.localVariables.getValue("sum"))
+        assertEquals(KatariValue.Int32(5), task.localVariables.getValue("sum"))
         assertTrue(task.localVariables.keys.none { it.startsWith("__narrative_fn_") })
     }
 
@@ -823,8 +827,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val twice = { value: Int -> value + value }
@@ -842,15 +846,15 @@ class NarrativeInstanceTest {
 
         val task = instance.currentState().tasks.single()
         assertEquals(listOf("result=8"), events)
-        assertIs<NarrativeValue.Lambda>(task.localVariables.getValue("twice"))
-        assertEquals(NarrativeValue.Int32(8), task.localVariables.getValue("result"))
+        assertIs<KatariValue.Lambda>(task.localVariables.getValue("twice"))
+        assertEquals(KatariValue.Int32(8), task.localVariables.getValue("result"))
     }
 
     @Test
     fun snapshotRoundTripPreservesLambdaValues() = runTest {
-        val codec = NarrativeStateSnapshotCodec()
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val codec = StateSnapshotCodec()
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val formatter = { value: Int -> "v=${'$'}value" }
@@ -875,14 +879,14 @@ class NarrativeInstanceTest {
         val restoredLambda = restored.tasks.single().localVariables.getValue("formatter")
 
         assertIs<LambdaValueSnapshot>(lambdaSnapshot)
-        assertIs<NarrativeValue.Lambda>(restoredLambda)
+        assertIs<KatariValue.Lambda>(restoredLambda)
     }
 
     @Test
     fun snapshotStoresLocalsOnlyInsideCallFrames() = runTest {
-        val codec = NarrativeStateSnapshotCodec()
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val codec = StateSnapshotCodec()
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val name = "Igor"
@@ -905,37 +909,47 @@ class NarrativeInstanceTest {
             snapshotTask.callFrames.last().variableRefs.getValue("name").valueId,
         )
 
-        assertEquals(emptyMap(), snapshotTask.localVariables)
-        assertEquals(emptyMap(), snapshot.globals)
+        val json = Json {
+            serializersModule = codec.serializersModule()
+            classDiscriminator = "kind"
+        }.encodeToString(KatariStateSnapshot.serializer(), snapshot)
+
+        assertTrue(!json.contains("localVariables"))
+        assertTrue(!json.contains("globals"))
+        assertTrue(json.contains("variableRefs"))
+        assertTrue(json.contains("values"))
         assertEquals(
-            com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot("Igor"),
+            TextValueSnapshot("Igor"),
             nameSnapshot,
         )
-        assertEquals(NarrativeValue.Text("Igor"), restored.tasks.single().localVariables.getValue("name"))
+        assertEquals(KatariValue.Text("Igor"), restored.tasks.single().localVariables.getValue("name"))
     }
 
     @Test
-    fun restoreLegacySnapshotWithoutCallFramesKeepsTaskLocals() = runTest {
-        val codec = NarrativeStateSnapshotCodec()
-        val restored = codec.restore(
-            NarrativeStateSnapshot(
-                programVersion = 1,
-                tasks = listOf(
-                    com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskSnapshot(
-                        id = "main",
-                        instructionPointer = 0,
-                        localVariables = mapOf("name" to com.sunnychung.lib.multiplatform.kotlite.narrative.TextValueSnapshot("Igor")),
-                        callFrames = emptyList(),
-                        nextCallFrameId = ROOT_CALL_FRAME_ID + 1,
-                        slots = emptyMap(),
-                        status = com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatusSnapshot.Ready,
-                    )
-                ),
+    fun restoreFailsWithDiagnosticsForMissingSnapshotValueReference() = runTest {
+        val codec = StateSnapshotCodec()
+        val error = assertFailsWith<StateSnapshotValidationException> {
+            codec.restore(
+                KatariStateSnapshot(
+                    programVersion = 1,
+                    values = emptyMap(),
+                    tasks = listOf(
+                        TaskSnapshot(
+                            id = "main",
+                            instructionPointer = 0,
+                            variableRefs = mapOf("name" to ValueReferenceSnapshot(999)),
+                            callFrames = emptyList(),
+                            nextCallFrameId = ROOT_CALL_FRAME_ID + 1,
+                            slots = emptyMap(),
+                            status = TaskStatusSnapshot.Ready,
+                        )
+                    ),
+                )
             )
-        )
+        }
 
-        assertEquals(NarrativeValue.Text("Igor"), restored.tasks.single().localVariables.getValue("name"))
-        assertEquals(emptyList(), restored.tasks.single().callFrames)
+        assertEquals("tasks[0].variableRefs[name]", error.diagnostics.single().path)
+        assertTrue(error.message!!.contains("missing snapshot value `999`"))
     }
 
     @Test
@@ -947,8 +961,8 @@ class NarrativeInstanceTest {
                 resume(options.first { it.enabled }.id)
             }
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var money = 0
@@ -974,14 +988,14 @@ class NarrativeInstanceTest {
 
     @Test
     fun temporarySlotsAndInternalVariablesAreCleanedAfterExpressionUse() = runTest {
-        val codec = NarrativeStateSnapshotCodec()
+        val codec = StateSnapshotCodec()
         val host = object : NarrativeHost {
             override fun narrate(text: String, resume: () -> Unit) = resume()
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = resume("Иван")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val name = readLine("Имя?")
@@ -1022,8 +1036,8 @@ class NarrativeInstanceTest {
                 resume(options.first { it.enabled }.id)
             }
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var hasKey = false
@@ -1067,8 +1081,8 @@ class NarrativeInstanceTest {
                 resume(options.first { it.enabled }.id)
             }
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var money = 0
@@ -1105,8 +1119,8 @@ class NarrativeInstanceTest {
                 resume(options.firstOrNull()?.id ?: "")
             }
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var once = false
@@ -1140,7 +1154,7 @@ class NarrativeInstanceTest {
     @Test
     fun jumpFromFunctionCannotTargetCheckpointOutsideFunctionScope() {
         assertFailsWith<UnsupportedOperationException> {
-            KotliteNarrativeProgram(
+            KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     fun go() {
@@ -1157,7 +1171,7 @@ class NarrativeInstanceTest {
     @Test
     fun jumpOutsideFunctionScopeReportsAbsoluteSourceColumn() {
         val error = assertFailsWith<UnsupportedOperationException> {
-            KotliteNarrativeProgram(
+            KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = "fun go() {\n" +
                     "    if (true) {\n" +
@@ -1187,8 +1201,8 @@ class NarrativeInstanceTest {
                 resume(options.firstOrNull()?.id ?: "")
             }
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     val action = "OPEN"
@@ -1230,8 +1244,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     jump enter
@@ -1268,8 +1282,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var count = 0
@@ -1311,8 +1325,8 @@ class NarrativeInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
-        val instance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     var a = 1
@@ -1334,7 +1348,7 @@ class NarrativeInstanceTest {
     }
 }
 
-private fun builtinFunctionDefinitions(): Array<NarrativeFunctionDefinition> {
+private fun builtinFunctionDefinitions(): Array<KatariFunctionDefinition> {
     val host = object : NarrativeHost {
         override fun narrate(text: String, resume: () -> Unit) = resume()
         override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = resume(options.first().id)
@@ -1349,13 +1363,13 @@ private fun builtinFunctionDefinitions(): Array<NarrativeFunctionDefinition> {
 
 @Serializable
 @SerialName("npc_ref")
-data class TestNpcSnapshot(val entityId: String) : NarrativeValueSnapshot()
+data class TestNpcSnapshot(val entityId: String) : ValueSnapshot()
 
 data class TestNpcRef(val id: String)
 
-object TestRestoreContext : NarrativeValueRestoreContext
+object TestRestoreContext : ValueRestoreContext
 
-class TestNpcCodec : NarrativeValueCodec<TestNpcSnapshot> {
+class TestNpcCodec : ValueCodec<TestNpcSnapshot> {
     override val typeId: String = "npc"
     override val snapshotClass: KClass<TestNpcSnapshot> = TestNpcSnapshot::class
     override val snapshotSerializer = TestNpcSnapshot.serializer()
@@ -1364,33 +1378,33 @@ class TestNpcCodec : NarrativeValueCodec<TestNpcSnapshot> {
         return TestNpcSnapshot((value as TestNpcRef).id)
     }
 
-    override suspend fun deserialize(snapshot: TestNpcSnapshot, context: NarrativeValueRestoreContext): Any {
+    override suspend fun deserialize(snapshot: TestNpcSnapshot, context: ValueRestoreContext): Any {
         return TestNpcRef("restored:${snapshot.entityId}")
     }
 }
 
-object PromptFlagFunction : NarrativeFunctionDefinition {
+object PromptFlagFunction : KatariFunctionDefinition {
     override val id: String = "promptFlag"
 
     override suspend fun startCall(
-        arguments: List<NarrativeValue>,
-        context: NarrativeFunctionContext,
-    ): NarrativeFunctionResult {
-        return NarrativeFunctionResult.Suspended
+        arguments: List<KatariValue>,
+        context: KatariFunctionContext,
+    ): FunctionResult {
+        return FunctionResult.Suspended
     }
 
     override suspend fun resumeCall(
-        arguments: List<NarrativeValue>,
-        response: NarrativeFunctionResponse?,
-        context: NarrativeFunctionContext,
-    ): NarrativeFunctionResult {
-        return NarrativeFunctionResult.Returned(NarrativeValue.Bool(true))
+        arguments: List<KatariValue>,
+        response: FunctionResponse?,
+        context: KatariFunctionContext,
+    ): FunctionResult {
+        return FunctionResult.Returned(KatariValue.Bool(true))
     }
 
     override fun dispatch(
-        arguments: List<NarrativeValue>,
-        context: NarrativeFunctionDispatchContext,
-        resume: (NarrativeFunctionResponse?) -> Unit,
+        arguments: List<KatariValue>,
+        context: KatariFunctionDispatchContext,
+        resume: (FunctionResponse?) -> Unit,
     ) {
         resume(null)
     }

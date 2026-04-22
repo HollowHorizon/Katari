@@ -1,5 +1,6 @@
-package com.sunnychung.lib.multiplatform.kotlite.narrative
+package com.sunnychung.lib.multiplatform.kotlite.katari
 
+import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -11,14 +12,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class NarrativeInstance(
-    private val program: NarrativeProgram,
-    initialState: NarrativeState = NarrativeState(
+class KatariInstance(
+    private val program: KatariProgram,
+    initialState: KatariState = KatariState(
         programVersion = program.version,
-        tasks = listOf(NarrativeTaskState(id = program.entryTaskId)),
+        tasks = listOf(TaskState(id = program.entryTaskId)),
     ),
-    private val functionRegistry: NarrativeFunctionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
-    private val snapshotCodec: NarrativeStateSnapshotCodec = NarrativeStateSnapshotCodec(),
+    private val functionRegistry: KatariFunctionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
+    private val snapshotCodec: StateSnapshotCodec = StateSnapshotCodec(),
     coroutineScope: CoroutineScope? = null,
 ) {
     companion object {
@@ -30,7 +31,7 @@ class NarrativeInstance(
     private val mutex = Mutex()
     private val completion = CompletableDeferred<Unit>()
     private val inFlightTasks = mutableSetOf<String>()
-    private var currentState: NarrativeState = initialState
+    private var currentState: KatariState = initialState
     private var executionJob: Job? = null
     private var cancelled = false
 
@@ -63,14 +64,14 @@ class NarrativeInstance(
         completion.await()
     }
 
-    suspend fun serializeState(): NarrativeStateSnapshot {
+    suspend fun serializeState(): KatariStateSnapshot {
         return mutex.withLock {
             val compacted = currentState.copy(tasks = currentState.tasks.map { compactTaskForSnapshot(it) })
             snapshotCodec.serialize(compacted)
         }
     }
 
-    suspend fun currentState(): NarrativeState {
+    suspend fun currentState(): KatariState {
         return mutex.withLock { currentState }
     }
 
@@ -94,7 +95,7 @@ class NarrativeInstance(
             var pendingSuspensions: List<FunctionDispatchRequest> = emptyList()
             var shouldReturn = false
             mutex.withLock {
-                val taskIndex = currentState.tasks.indexOfFirst { it.status == NarrativeTaskStatus.Ready }
+                val taskIndex = currentState.tasks.indexOfFirst { it.status == TaskStatus.Ready }
                 if (taskIndex < 0) {
                     pendingSuspensions = collectUndispatchedSuspensionsLocked()
                     if (currentState.tasks.all { isTaskFinal(it.status) } && !completion.isCompleted) {
@@ -160,7 +161,7 @@ class NarrativeInstance(
                                 currentState = currentState.completeTask(taskIndex)
                             }
                             is EnterCallFrameInstruction -> {
-                                val nextFrame = NarrativeCallFrameState(
+                                val nextFrame = CallFrameState(
                                     id = task.nextCallFrameId,
                                     functionId = instruction.functionId,
                                     lexicalParentFrameId = instruction.lexicalParentFrameId,
@@ -174,7 +175,7 @@ class NarrativeInstance(
                             }
                             is ExitCallFrameInstruction -> {
                                 val returnValue = instruction.returnExpression?.let { evaluateExpression(currentState, task, it) }
-                                    ?: NarrativeValue.Null
+                                    ?: KatariValue.Null
                                 currentState = currentState.updateTask(
                                     index = taskIndex,
                                     task = applyExitCallFrameInstruction(task, instruction, returnValue),
@@ -189,7 +190,7 @@ class NarrativeInstance(
                                         instructionPointer = task.instructionPointer + 1,
                                         callFrames = task.callFrames.replaceLast(updatedFrame),
                                         slots = task.slots.filterValues { slotValue ->
-                                            slotValue !is NarrativeSlotValue.VariableReference ||
+                                            slotValue !is SlotValue.VariableReference ||
                                                 slotValue.frameId != frame.id || slotValue.name !in names
                                         },
                                     )
@@ -204,7 +205,7 @@ class NarrativeInstance(
                         val message = buildRuntimeErrorMessage(instruction.position, e)
                         currentState = currentState.updateTask(
                             index = taskIndex,
-                            task = task.copy(status = NarrativeTaskStatus.Failed(message = message)),
+                            task = task.copy(status = TaskStatus.Failed(message = message)),
                         )
                     }
                 }
@@ -223,14 +224,14 @@ class NarrativeInstance(
 
     private suspend fun executeFunctionCallLocked(
         taskIndex: Int,
-        task: NarrativeTaskState,
+        task: TaskState,
         instruction: CallFunctionInstruction,
     ): FunctionDispatchRequest? {
         val arguments = evaluateArguments(task, instruction)
         val referencedSlots = collectReferencedSlots(instruction.arguments)
         val definition = functionRegistry.definition(instruction.functionId)
-        return when (val result = definition.startCall(arguments, DefaultNarrativeFunctionContext(currentState, task))) {
-            is NarrativeFunctionResult.Returned -> {
+        return when (val result = definition.startCall(arguments, DefaultKatariFunctionContext(currentState, task))) {
+            is FunctionResult.Returned -> {
                 currentState = currentState.updateTask(
                     index = taskIndex,
                     task = cleanupSlots(
@@ -245,8 +246,8 @@ class NarrativeInstance(
                 )
                 null
             }
-            NarrativeFunctionResult.Suspended -> {
-                val suspendedStatus = NarrativeTaskStatus.SuspendedCall(
+            FunctionResult.Suspended -> {
+                val suspendedStatus = TaskStatus.SuspendedCall(
                     resultTarget = instruction.resultTarget,
                     nextInstructionPointer = task.instructionPointer + 1,
                 )
@@ -263,7 +264,7 @@ class NarrativeInstance(
         val dispatchData = mutex.withLock {
             if (request.taskId in inFlightTasks) return
             val task = currentState.tasks.firstOrNull { currentTask ->
-                currentTask.id == request.taskId && currentTask.status is NarrativeTaskStatus.SuspendedCall
+                currentTask.id == request.taskId && currentTask.status is TaskStatus.SuspendedCall
             }?.let { normalizeTask(it) } ?: return
             inFlightTasks += request.taskId
             val instruction = resolveSuspendedCallInstruction(task)
@@ -272,7 +273,7 @@ class NarrativeInstance(
                 taskId = task.id,
                 arguments = arguments,
                 definition = functionRegistry.definition(instruction.functionId),
-                context = DefaultNarrativeFunctionContext(currentState, task),
+                context = DefaultKatariFunctionContext(currentState, task),
             )
         }
 
@@ -301,18 +302,18 @@ class NarrativeInstance(
 
     private suspend fun handleResume(
         taskId: String,
-        response: NarrativeFunctionResponse?,
+        response: FunctionResponse?,
     ) {
         val pending: List<FunctionDispatchRequest>
         mutex.withLock {
             inFlightTasks -= taskId
             val taskIndex = currentState.tasks.indexOfFirst {
-                it.id == taskId && it.status is NarrativeTaskStatus.SuspendedCall
+                it.id == taskId && it.status is TaskStatus.SuspendedCall
             }
             if (taskIndex < 0 || cancelled) return
 
             val task = normalizeTask(currentState.tasks[taskIndex])
-            val status = task.status as NarrativeTaskStatus.SuspendedCall
+            val status = task.status as TaskStatus.SuspendedCall
             val instruction = resolveSuspendedCallInstruction(task)
             val arguments = evaluateArguments(task, instruction)
             val referencedSlots = collectReferencedSlots(instruction.arguments)
@@ -321,14 +322,14 @@ class NarrativeInstance(
                 when (val result = definition.resumeCall(
                     arguments = arguments,
                     response = response,
-                    context = DefaultNarrativeFunctionContext(currentState, task),
+                    context = DefaultKatariFunctionContext(currentState, task),
                 )) {
-                    is NarrativeFunctionResult.Returned -> {
+                    is FunctionResult.Returned -> {
                         currentState = currentState.updateTask(
                             index = taskIndex,
                             task = cleanupSlots(
                                 task = applyResultTarget(
-                                    task = task.copy(status = NarrativeTaskStatus.Ready),
+                                    task = task.copy(status = TaskStatus.Ready),
                                     resultTarget = status.resultTarget,
                                     value = result.value,
                                     nextInstructionPointer = status.nextInstructionPointer,
@@ -337,7 +338,7 @@ class NarrativeInstance(
                             ),
                         )
                     }
-                    NarrativeFunctionResult.Suspended -> {
+                    FunctionResult.Suspended -> {
                         currentState = currentState.updateTask(
                             index = taskIndex,
                             task = task,
@@ -350,7 +351,7 @@ class NarrativeInstance(
                 }
                 currentState = currentState.updateTask(
                     index = taskIndex,
-                    task = task.copy(status = NarrativeTaskStatus.Failed(message = buildRuntimeErrorMessage(null, e))),
+                    task = task.copy(status = TaskStatus.Failed(message = buildRuntimeErrorMessage(null, e))),
                 )
             }
 
@@ -369,7 +370,7 @@ class NarrativeInstance(
 
     private fun collectUndispatchedSuspensionsLocked(): List<FunctionDispatchRequest> {
         return currentState.tasks.mapNotNull { task ->
-            if (task.status !is NarrativeTaskStatus.SuspendedCall || task.id in inFlightTasks) {
+            if (task.status !is TaskStatus.SuspendedCall || task.id in inFlightTasks) {
                 null
             } else {
                 FunctionDispatchRequest(task.id)
@@ -378,9 +379,9 @@ class NarrativeInstance(
     }
 
     private fun applySetVariableInstruction(
-        task: NarrativeTaskState,
+        task: TaskState,
         instruction: SetVariableInstruction,
-    ): NarrativeTaskState {
+    ): TaskState {
         val value = evaluateExpression(currentState, task, instruction.expression)
         val frame = currentCallFrame(task)
         val updated = frame.copy(localVariables = frame.localVariables + (instruction.name to value))
@@ -394,19 +395,19 @@ class NarrativeInstance(
     }
 
     private fun applyResultTarget(
-        task: NarrativeTaskState,
-        resultTarget: NarrativeResultTarget?,
-        value: NarrativeValue,
+        task: TaskState,
+        resultTarget: ResultTarget?,
+        value: KatariValue,
         nextInstructionPointer: Int,
-    ): NarrativeTaskState {
+    ): TaskState {
         return when (resultTarget) {
             null -> task.copy(instructionPointer = nextInstructionPointer)
-            is NarrativeResultTarget.Variable -> {
+            is ResultTarget.Variable -> {
                 val frame = currentCallFrame(task)
                 val updated = frame.copy(localVariables = frame.localVariables + (resultTarget.name to value))
                 syncTopLocals(task.copy(instructionPointer = nextInstructionPointer, callFrames = task.callFrames.replaceLast(updated)))
             }
-            is NarrativeResultTarget.Slot -> {
+            is ResultTarget.Slot -> {
                 val frame = currentCallFrame(task)
                 val slotVariableName = slotVariableName(resultTarget.slot)
                 val updated = frame.copy(localVariables = frame.localVariables + (slotVariableName to value))
@@ -415,7 +416,7 @@ class NarrativeInstance(
                         instructionPointer = nextInstructionPointer,
                         callFrames = task.callFrames.replaceLast(updated),
                         slots = task.slots + (
-                            resultTarget.slot to NarrativeSlotValue.VariableReference(name = slotVariableName, frameId = frame.id)
+                            resultTarget.slot to SlotValue.VariableReference(name = slotVariableName, frameId = frame.id)
                         ),
                     )
                 )
@@ -424,19 +425,19 @@ class NarrativeInstance(
     }
 
     private fun applyExpressionResultTarget(
-        task: NarrativeTaskState,
-        resultTarget: NarrativeResultTarget,
-        expression: NarrativeExpression,
+        task: TaskState,
+        resultTarget: ResultTarget,
+        expression: KatariExpression,
         nextInstructionPointer: Int,
-    ): NarrativeTaskState {
+    ): TaskState {
         return when (resultTarget) {
-            is NarrativeResultTarget.Variable -> applyResultTarget(
+            is ResultTarget.Variable -> applyResultTarget(
                 task = task,
                 resultTarget = resultTarget,
                 value = evaluateExpression(currentState, task, expression),
                 nextInstructionPointer = nextInstructionPointer,
             )
-            is NarrativeResultTarget.Slot -> {
+            is ResultTarget.Slot -> {
                 val reference = evaluateSlotReference(currentState, task, expression)
                 if (reference != null) {
                     task.copy(
@@ -453,7 +454,7 @@ class NarrativeInstance(
                             instructionPointer = nextInstructionPointer,
                             callFrames = task.callFrames.replaceLast(updated),
                             slots = task.slots + (
-                                resultTarget.slot to NarrativeSlotValue.VariableReference(name = slotVariableName, frameId = frame.id)
+                                resultTarget.slot to SlotValue.VariableReference(name = slotVariableName, frameId = frame.id)
                             ),
                         )
                     )
@@ -463,130 +464,130 @@ class NarrativeInstance(
     }
 
     private fun evaluateSlotReference(
-        state: NarrativeState,
-        task: NarrativeTaskState,
-        expression: NarrativeExpression,
-    ): NarrativeSlotValue.VariableReference? {
+        state: KatariState,
+        task: TaskState,
+        expression: KatariExpression,
+    ): SlotValue.VariableReference? {
         return when (expression) {
             is VariableExpression -> resolveVariableReference(state, task, expression.name)
-            is SlotExpression -> task.slots[expression.slot] as? NarrativeSlotValue.VariableReference
+            is SlotExpression -> task.slots[expression.slot] as? SlotValue.VariableReference
                 ?: throw IllegalArgumentException("Slot `${expression.slot}` is not defined")
             else -> null
         }
     }
 
-    private fun resolveSuspendedCallInstruction(task: NarrativeTaskState): CallFunctionInstruction {
+    private fun resolveSuspendedCallInstruction(task: TaskState): CallFunctionInstruction {
         return program.instructions.getOrNull(task.instructionPointer) as? CallFunctionInstruction
             ?: throw IllegalStateException("Task `${task.id}` is suspended at instruction ${task.instructionPointer}, but no function call exists there")
     }
 
     private fun evaluateArguments(
-        task: NarrativeTaskState,
+        task: TaskState,
         instruction: CallFunctionInstruction,
-    ): List<NarrativeValue> {
+    ): List<KatariValue> {
         return instruction.arguments.map { evaluateExpression(currentState, task, it) }
     }
 
     private fun evaluateExpression(
-        state: NarrativeState,
-        task: NarrativeTaskState,
-        expression: NarrativeExpression,
-    ): NarrativeValue {
+        state: KatariState,
+        task: TaskState,
+        expression: KatariExpression,
+    ): KatariValue {
         try {
             return when (expression) {
                 is LiteralExpression -> expression.value
                 is VariableExpression -> resolveVariableValue(state, task, expression.name)
                 is SlotExpression -> resolveSlotValue(state, task, expression.slot)
-                is LambdaLiteralExpression -> NarrativeValue.Lambda(expression.lambdaId)
+                is LambdaLiteralExpression -> KatariValue.Lambda(expression.lambdaId)
                 is UnaryExpression -> {
                     val operand = evaluateExpression(state, task, expression.operand)
                     when (expression.operator) {
-                        NarrativeUnaryOperator.Plus -> operand.numericIdentity()
-                        NarrativeUnaryOperator.Minus -> operand.negateNumeric()
-                        NarrativeUnaryOperator.Not -> NarrativeValue.Bool(!operand.asBoolean())
+                        UnaryOperator.Plus -> operand.numericIdentity()
+                        UnaryOperator.Minus -> operand.negateNumeric()
+                        UnaryOperator.Not -> KatariValue.Bool(!operand.asBoolean())
                     }
                 }
                 is BinaryExpression -> {
                     val left = evaluateExpression(state, task, expression.left)
                     when (expression.operator) {
-                        NarrativeBinaryOperator.Add -> {
+                        BinaryOperator.Add -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is NarrativeValue.Text || right is NarrativeValue.Text) {
-                                NarrativeValue.Text(left.asString() + right.asString())
-                            } else if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
-                                NarrativeValue.Float64(left.asDouble() + right.asDouble())
+                            if (left is KatariValue.Text || right is KatariValue.Text) {
+                                KatariValue.Text(left.asString() + right.asString())
+                            } else if (left is KatariValue.Float64 || right is KatariValue.Float64) {
+                                KatariValue.Float64(left.asDouble() + right.asDouble())
                             } else {
-                                NarrativeValue.Int32(left.asInt() + right.asInt())
+                                KatariValue.Int32(left.asInt() + right.asInt())
                             }
                         }
-                        NarrativeBinaryOperator.Subtract -> {
+                        BinaryOperator.Subtract -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
-                                NarrativeValue.Float64(left.asDouble() - right.asDouble())
+                            if (left is KatariValue.Float64 || right is KatariValue.Float64) {
+                                KatariValue.Float64(left.asDouble() - right.asDouble())
                             } else {
-                        NarrativeValue.Int32(left.asInt() - right.asInt())
+                        KatariValue.Int32(left.asInt() - right.asInt())
                     }
                 }
-                NarrativeBinaryOperator.Multiply -> {
+                BinaryOperator.Multiply -> {
                     val right = evaluateExpression(state, task, expression.right)
-                    if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
-                        NarrativeValue.Float64(left.asDouble() * right.asDouble())
+                    if (left is KatariValue.Float64 || right is KatariValue.Float64) {
+                        KatariValue.Float64(left.asDouble() * right.asDouble())
                     } else {
-                        NarrativeValue.Int32(left.asInt() * right.asInt())
+                        KatariValue.Int32(left.asInt() * right.asInt())
                     }
                 }
-                NarrativeBinaryOperator.Divide -> {
+                BinaryOperator.Divide -> {
                     val right = evaluateExpression(state, task, expression.right)
-                    if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
-                        NarrativeValue.Float64(left.asDouble() / right.asDouble())
+                    if (left is KatariValue.Float64 || right is KatariValue.Float64) {
+                        KatariValue.Float64(left.asDouble() / right.asDouble())
                     } else {
-                        NarrativeValue.Int32(left.asInt() / right.asInt())
+                        KatariValue.Int32(left.asInt() / right.asInt())
                     }
                 }
-                NarrativeBinaryOperator.Remainder -> {
+                BinaryOperator.Remainder -> {
                     val right = evaluateExpression(state, task, expression.right)
-                    if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
-                        NarrativeValue.Float64(left.asDouble() % right.asDouble())
+                    if (left is KatariValue.Float64 || right is KatariValue.Float64) {
+                        KatariValue.Float64(left.asDouble() % right.asDouble())
                     } else {
-                        NarrativeValue.Int32(left.asInt() % right.asInt())
+                        KatariValue.Int32(left.asInt() % right.asInt())
                     }
                 }
-                NarrativeBinaryOperator.LessThan -> {
+                BinaryOperator.LessThan -> {
                     val right = evaluateExpression(state, task, expression.right)
-                    if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
-                                NarrativeValue.Bool(left.asDouble() < right.asDouble())
+                    if (left is KatariValue.Float64 || right is KatariValue.Float64) {
+                                KatariValue.Bool(left.asDouble() < right.asDouble())
                             } else {
-                                NarrativeValue.Bool(left.asInt() < right.asInt())
+                                KatariValue.Bool(left.asInt() < right.asInt())
                             }
                         }
-                        NarrativeBinaryOperator.LessThanOrEquals -> {
+                        BinaryOperator.LessThanOrEquals -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
-                                NarrativeValue.Bool(left.asDouble() <= right.asDouble())
+                            if (left is KatariValue.Float64 || right is KatariValue.Float64) {
+                                KatariValue.Bool(left.asDouble() <= right.asDouble())
                             } else {
-                                NarrativeValue.Bool(left.asInt() <= right.asInt())
+                                KatariValue.Bool(left.asInt() <= right.asInt())
                             }
                         }
-                        NarrativeBinaryOperator.GreaterThan -> {
+                        BinaryOperator.GreaterThan -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
-                                NarrativeValue.Bool(left.asDouble() > right.asDouble())
+                            if (left is KatariValue.Float64 || right is KatariValue.Float64) {
+                                KatariValue.Bool(left.asDouble() > right.asDouble())
                             } else {
-                                NarrativeValue.Bool(left.asInt() > right.asInt())
+                                KatariValue.Bool(left.asInt() > right.asInt())
                             }
                         }
-                        NarrativeBinaryOperator.GreaterThanOrEquals -> {
+                        BinaryOperator.GreaterThanOrEquals -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is NarrativeValue.Float64 || right is NarrativeValue.Float64) {
-                                NarrativeValue.Bool(left.asDouble() >= right.asDouble())
+                            if (left is KatariValue.Float64 || right is KatariValue.Float64) {
+                                KatariValue.Bool(left.asDouble() >= right.asDouble())
                             } else {
-                                NarrativeValue.Bool(left.asInt() >= right.asInt())
+                                KatariValue.Bool(left.asInt() >= right.asInt())
                             }
                         }
-                        NarrativeBinaryOperator.Equals -> NarrativeValue.Bool(left == evaluateExpression(state, task, expression.right))
-                        NarrativeBinaryOperator.NotEquals -> NarrativeValue.Bool(left != evaluateExpression(state, task, expression.right))
-                        NarrativeBinaryOperator.And -> NarrativeValue.Bool(left.asBoolean() && evaluateExpression(state, task, expression.right).asBoolean())
-                        NarrativeBinaryOperator.Or -> NarrativeValue.Bool(left.asBoolean() || evaluateExpression(state, task, expression.right).asBoolean())
+                        BinaryOperator.Equals -> KatariValue.Bool(left == evaluateExpression(state, task, expression.right))
+                        BinaryOperator.NotEquals -> KatariValue.Bool(left != evaluateExpression(state, task, expression.right))
+                        BinaryOperator.And -> KatariValue.Bool(left.asBoolean() && evaluateExpression(state, task, expression.right).asBoolean())
+                        BinaryOperator.Or -> KatariValue.Bool(left.asBoolean() || evaluateExpression(state, task, expression.right).asBoolean())
                     }
                 }
             }
@@ -594,17 +595,17 @@ class NarrativeInstance(
             if (e is CancellationException) {
                 throw e
             }
-            if (e is NarrativeExpressionEvaluationException) {
+            if (e is KatariExpressionEvaluationException) {
                 if (e.position != null || expression.position == null) {
                     throw e
                 }
-                throw NarrativeExpressionEvaluationException(expression.position, e.cause ?: e)
+                throw KatariExpressionEvaluationException(expression.position, e.cause ?: e)
             }
-            throw NarrativeExpressionEvaluationException(expression.position, e)
+            throw KatariExpressionEvaluationException(expression.position, e)
         }
     }
 
-    private fun resolveVariableValue(state: NarrativeState, task: NarrativeTaskState, name: String): NarrativeValue {
+    private fun resolveVariableValue(state: KatariState, task: TaskState, name: String): KatariValue {
         val frameValue = findFrameVariable(task, currentCallFrame(task).id, name)
         if (frameValue != null) {
             return frameValue.second
@@ -613,31 +614,31 @@ class NarrativeInstance(
     }
 
     private fun resolveVariableReference(
-        state: NarrativeState,
-        task: NarrativeTaskState,
+        state: KatariState,
+        task: TaskState,
         name: String,
-    ): NarrativeSlotValue.VariableReference {
+    ): SlotValue.VariableReference {
         val frameValue = findFrameVariable(task, currentCallFrame(task).id, name)
         if (frameValue != null) {
-            return NarrativeSlotValue.VariableReference(name = name, frameId = frameValue.first.id)
+            return SlotValue.VariableReference(name = name, frameId = frameValue.first.id)
         }
         if (name in state.globals) {
-            return NarrativeSlotValue.VariableReference(name = name, frameId = null)
+            return SlotValue.VariableReference(name = name, frameId = null)
         }
         throw IllegalArgumentException("Variable `$name` is not defined")
     }
 
-    private fun resolveSlotValue(state: NarrativeState, task: NarrativeTaskState, slot: Int): NarrativeValue {
-        val reference = task.slots[slot] as? NarrativeSlotValue.VariableReference
+    private fun resolveSlotValue(state: KatariState, task: TaskState, slot: Int): KatariValue {
+        val reference = task.slots[slot] as? SlotValue.VariableReference
             ?: throw IllegalArgumentException("Slot `$slot` is not defined")
         return resolveReferenceValue(state, task, reference)
     }
 
     private fun resolveReferenceValue(
-        state: NarrativeState,
-        task: NarrativeTaskState,
-        reference: NarrativeSlotValue.VariableReference,
-    ): NarrativeValue {
+        state: KatariState,
+        task: TaskState,
+        reference: SlotValue.VariableReference,
+    ): KatariValue {
         return if (reference.frameId == null) {
             state.globals[reference.name]
                 ?: throw IllegalArgumentException("Global variable `${reference.name}` is not defined")
@@ -649,7 +650,7 @@ class NarrativeInstance(
         }
     }
 
-    private fun findFrameVariable(task: NarrativeTaskState, frameId: Int, name: String): Pair<NarrativeCallFrameState, NarrativeValue>? {
+    private fun findFrameVariable(task: TaskState, frameId: Int, name: String): Pair<CallFrameState, KatariValue>? {
         val frame = findFrameById(task, frameId) ?: return null
         val value = frame.localVariables[name]
         if (value != null) {
@@ -659,22 +660,22 @@ class NarrativeInstance(
         return findFrameVariable(task, lexicalParent, name)
     }
 
-    private fun findFrameById(task: NarrativeTaskState, frameId: Int): NarrativeCallFrameState? {
+    private fun findFrameById(task: TaskState, frameId: Int): CallFrameState? {
         return task.callFrames.firstOrNull { it.id == frameId }
     }
 
     private fun applyExitCallFrameInstruction(
-        task: NarrativeTaskState,
+        task: TaskState,
         instruction: ExitCallFrameInstruction,
-        returnValue: NarrativeValue,
-    ): NarrativeTaskState {
+        returnValue: KatariValue,
+    ): TaskState {
         require(task.callFrames.size > 1) { "Cannot exit root call frame" }
         val exitingFrame = currentCallFrame(task)
         val popped = task.copy(
             callFrames = task.callFrames.dropLast(1),
             instructionPointer = task.instructionPointer + 1,
             slots = task.slots.filterValues { ref ->
-                (ref as? NarrativeSlotValue.VariableReference)?.frameId != exitingFrame.id
+                (ref as? SlotValue.VariableReference)?.frameId != exitingFrame.id
             },
         )
         val nextTask = applyResultTarget(
@@ -686,17 +687,17 @@ class NarrativeInstance(
         return syncTopLocals(nextTask)
     }
 
-    private fun cleanupSlots(task: NarrativeTaskState, slotsToRemove: Set<Int>): NarrativeTaskState {
+    private fun cleanupSlots(task: TaskState, slotsToRemove: Set<Int>): TaskState {
         if (slotsToRemove.isEmpty()) {
             return task
         }
 
         val removedReferences = slotsToRemove.mapNotNull { slot ->
-            task.slots[slot] as? NarrativeSlotValue.VariableReference
+            task.slots[slot] as? SlotValue.VariableReference
         }
         val remainingSlots = task.slots - slotsToRemove
         val remainingReferences = remainingSlots.values
-            .mapNotNull { it as? NarrativeSlotValue.VariableReference }
+            .mapNotNull { it as? SlotValue.VariableReference }
             .map { it.frameId to it.name }
             .toSet()
 
@@ -710,7 +711,7 @@ class NarrativeInstance(
         return syncTopLocals(nextTask)
     }
 
-    private fun removeFrameLocal(task: NarrativeTaskState, frameId: Int, name: String): NarrativeTaskState {
+    private fun removeFrameLocal(task: TaskState, frameId: Int, name: String): TaskState {
         val index = task.callFrames.indexOfFirst { it.id == frameId }
         if (index < 0) return task
         val frame = task.callFrames[index]
@@ -721,11 +722,11 @@ class NarrativeInstance(
         return task.copy(callFrames = frames)
     }
 
-    private fun collectReferencedSlots(expressions: List<NarrativeExpression>): Set<Int> {
+    private fun collectReferencedSlots(expressions: List<KatariExpression>): Set<Int> {
         return expressions.flatMapTo(linkedSetOf()) { collectReferencedSlots(it) }
     }
 
-    private fun collectReferencedSlots(expression: NarrativeExpression): Set<Int> {
+    private fun collectReferencedSlots(expression: KatariExpression): Set<Int> {
         return when (expression) {
             is LiteralExpression -> emptySet()
             is VariableExpression -> emptySet()
@@ -736,33 +737,33 @@ class NarrativeInstance(
         }
     }
 
-    private fun NarrativeState.updateTask(index: Int, task: NarrativeTaskState): NarrativeState {
+    private fun KatariState.updateTask(index: Int, task: TaskState): KatariState {
         return copy(tasks = tasks.mapIndexed { currentIndex, currentTask ->
             if (currentIndex == index) syncTopLocals(normalizeTask(task)) else currentTask
         })
     }
 
-    private fun NarrativeState.completeTask(index: Int): NarrativeState {
-        return updateTask(index, tasks[index].copy(status = NarrativeTaskStatus.Completed))
+    private fun KatariState.completeTask(index: Int): KatariState {
+        return updateTask(index, tasks[index].copy(status = TaskStatus.Completed))
     }
 
-    private fun isTaskFinal(status: NarrativeTaskStatus): Boolean {
-        return status == NarrativeTaskStatus.Completed || status is NarrativeTaskStatus.Failed
+    private fun isTaskFinal(status: TaskStatus): Boolean {
+        return status == TaskStatus.Completed || status is TaskStatus.Failed
     }
 
     private fun buildRuntimeErrorMessage(position: Any?, error: Throwable): String {
         var resolvedPosition = position
         var resolvedError: Throwable = error
-        if (error is NarrativeExpressionEvaluationException) {
+        if (error is KatariExpressionEvaluationException) {
             if (error.position != null) {
                 resolvedPosition = error.position
             }
             resolvedError = error.cause ?: error
         }
-        val base = resolvedError.message ?: resolvedError::class.simpleName ?: "Unknown narrative runtime error"
+        val base = resolvedError.message ?: resolvedError::class.simpleName ?: "Unknown Katari runtime error"
         return when (resolvedPosition) {
             null -> base
-            is com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition -> "$resolvedPosition $base"
+            is SourcePosition -> "$resolvedPosition $base"
             else -> "[$resolvedPosition] $base"
         }
     }
@@ -774,7 +775,7 @@ class NarrativeInstance(
             val task = normalizeTask(currentState.tasks[taskIndex])
             currentState = currentState.updateTask(
                 index = taskIndex,
-                task = task.copy(status = NarrativeTaskStatus.Failed(message = message)),
+                task = task.copy(status = TaskStatus.Failed(message = message)),
             )
             if (currentState.tasks.all { isTaskFinal(it.status) } && !completion.isCompleted) {
                 completion.complete(Unit)
@@ -783,13 +784,13 @@ class NarrativeInstance(
         }
     }
 
-    private fun normalizeTask(task: NarrativeTaskState): NarrativeTaskState {
+    private fun normalizeTask(task: TaskState): TaskState {
         if (task.callFrames.isNotEmpty()) {
             return syncTopLocals(task)
         }
         return task.copy(
             callFrames = listOf(
-                NarrativeCallFrameState(
+                CallFrameState(
                     id = ROOT_CALL_FRAME_ID,
                     functionId = ROOT_CALL_FRAME_FUNCTION_ID,
                     lexicalParentFrameId = null,
@@ -800,14 +801,14 @@ class NarrativeInstance(
         )
     }
 
-    private fun syncTopLocals(task: NarrativeTaskState): NarrativeTaskState {
+    private fun syncTopLocals(task: TaskState): TaskState {
         val top = task.callFrames.lastOrNull() ?: return task
         return task.copy(localVariables = top.localVariables)
     }
 
-    private fun currentCallFrame(task: NarrativeTaskState): NarrativeCallFrameState {
+    private fun currentCallFrame(task: TaskState): CallFrameState {
         return task.callFrames.lastOrNull()
-            ?: NarrativeCallFrameState(
+            ?: CallFrameState(
                 id = ROOT_CALL_FRAME_ID,
                 functionId = ROOT_CALL_FRAME_FUNCTION_ID,
                 lexicalParentFrameId = null,
@@ -815,15 +816,15 @@ class NarrativeInstance(
             )
     }
 
-    private fun compactTaskForSnapshot(task: NarrativeTaskState): NarrativeTaskState {
+    private fun compactTaskForSnapshot(task: TaskState): TaskState {
         val normalized = normalizeTask(task)
         val existingFrameIds = normalized.callFrames.map { it.id }.toSet()
         val filteredSlots = normalized.slots.filterValues { value ->
-            val ref = value as NarrativeSlotValue.VariableReference
+            val ref = value as SlotValue.VariableReference
             ref.frameId == null || ref.frameId in existingFrameIds
         }
         val liveRefs = filteredSlots.values
-            .map { it as NarrativeSlotValue.VariableReference }
+            .map { it as SlotValue.VariableReference }
             .map { it.frameId to it.name }
             .toSet()
 
@@ -842,53 +843,53 @@ class NarrativeInstance(
         )
     }
 
-    private fun NarrativeValue.asBoolean(): Boolean {
+    private fun KatariValue.asBoolean(): Boolean {
         return when (this) {
-            is NarrativeValue.Bool -> value
+            is KatariValue.Bool -> value
             else -> throw IllegalArgumentException("Expected boolean value but got $this")
         }
     }
 
-    private fun NarrativeValue.asInt(): Int {
+    private fun KatariValue.asInt(): Int {
         return when (this) {
-            is NarrativeValue.Int32 -> value
+            is KatariValue.Int32 -> value
             else -> throw IllegalArgumentException("Expected int value but got $this")
         }
     }
 
-    private fun NarrativeValue.asDouble(): Double {
+    private fun KatariValue.asDouble(): Double {
         return when (this) {
-            is NarrativeValue.Int32 -> value.toDouble()
-            is NarrativeValue.Float64 -> value
+            is KatariValue.Int32 -> value.toDouble()
+            is KatariValue.Float64 -> value
             else -> throw IllegalArgumentException("Expected numeric value but got $this")
         }
     }
 
-    private fun NarrativeValue.numericIdentity(): NarrativeValue {
+    private fun KatariValue.numericIdentity(): KatariValue {
         return when (this) {
-            is NarrativeValue.Int32 -> this
-            is NarrativeValue.Float64 -> this
+            is KatariValue.Int32 -> this
+            is KatariValue.Float64 -> this
             else -> throw IllegalArgumentException("Expected numeric value but got $this")
         }
     }
 
-    private fun NarrativeValue.negateNumeric(): NarrativeValue {
+    private fun KatariValue.negateNumeric(): KatariValue {
         return when (this) {
-            is NarrativeValue.Int32 -> NarrativeValue.Int32(-value)
-            is NarrativeValue.Float64 -> NarrativeValue.Float64(-value)
+            is KatariValue.Int32 -> KatariValue.Int32(-value)
+            is KatariValue.Float64 -> KatariValue.Float64(-value)
             else -> throw IllegalArgumentException("Expected numeric value but got $this")
         }
     }
 
-    private fun NarrativeValue.asString(): String {
+    private fun KatariValue.asString(): String {
         return when (this) {
-            NarrativeValue.Null -> "null"
-            is NarrativeValue.Bool -> value.toString()
-            is NarrativeValue.Int32 -> value.toString()
-            is NarrativeValue.Float64 -> value.toString()
-            is NarrativeValue.Text -> value
-            is NarrativeValue.Lambda -> "Lambda($id)"
-            is NarrativeValue.HostObject -> value.toString()
+            KatariValue.Null -> "null"
+            is KatariValue.Bool -> value.toString()
+            is KatariValue.Int32 -> value.toString()
+            is KatariValue.Float64 -> value.toString()
+            is KatariValue.Text -> value
+            is KatariValue.Lambda -> "Lambda($id)"
+            is KatariValue.HostObject -> value.toString()
         }
     }
 
@@ -896,7 +897,7 @@ class NarrativeInstance(
 
     private fun isInternalSlotVariable(name: String): Boolean = name.startsWith(SLOT_VARIABLE_PREFIX)
 
-    private fun List<NarrativeCallFrameState>.replaceLast(frame: NarrativeCallFrameState): List<NarrativeCallFrameState> {
+    private fun List<CallFrameState>.replaceLast(frame: CallFrameState): List<CallFrameState> {
         if (isEmpty()) return this
         val list = toMutableList()
         list[list.lastIndex] = frame
@@ -910,12 +911,12 @@ private data class FunctionDispatchRequest(
 
 private data class DispatchData(
     val taskId: String,
-    val arguments: List<NarrativeValue>,
-    val definition: NarrativeFunctionDefinition,
-    val context: NarrativeFunctionDispatchContext,
+    val arguments: List<KatariValue>,
+    val definition: KatariFunctionDefinition,
+    val context: KatariFunctionDispatchContext,
 )
 
-private class NarrativeExpressionEvaluationException(
-    val position: com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition?,
+private class KatariExpressionEvaluationException(
+    val position: SourcePosition?,
     cause: Throwable,
 ) : RuntimeException(cause.message, cause)

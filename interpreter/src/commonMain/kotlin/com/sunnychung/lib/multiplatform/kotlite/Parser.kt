@@ -1,6 +1,7 @@
 package com.sunnychung.lib.multiplatform.kotlite
 
 import com.sunnychung.lib.multiplatform.kotlite.error.ExpectTokenMismatchException
+import com.sunnychung.lib.multiplatform.kotlite.error.ExpectTokenMismatchExceptionWithActual
 import com.sunnychung.lib.multiplatform.kotlite.error.ParseException
 import com.sunnychung.lib.multiplatform.kotlite.error.UnexpectedTokenException
 import com.sunnychung.lib.multiplatform.kotlite.extension.removeAfterIndex
@@ -138,7 +139,7 @@ open class Parser(protected val lexer: Lexer) {
     }
 
     fun eat(tokenType: TokenType): Token {
-        if (currentToken.type != tokenType) throw ExpectTokenMismatchException("$tokenType", currentToken.position)
+        if (currentToken.type != tokenType) throw ExpectTokenMismatchExceptionWithActual(tokenType.name, currentToken)
         log.v { "ate $tokenType: ${currentToken.value}" }
         val t = currentToken
         if (t.type != TokenType.EOF) {
@@ -148,7 +149,9 @@ open class Parser(protected val lexer: Lexer) {
     }
 
     fun eat(tokenType: TokenType, value: Any): Token {
-        if (currentToken.type != tokenType || currentToken.value != value) throw ExpectTokenMismatchException("$tokenType `$value`", currentToken.position)
+        if (currentToken.type != tokenType || currentToken.value != value) {
+            throw ExpectTokenMismatchExceptionWithActual("${tokenType.name} `$value`", currentToken)
+        }
         log.v { "ate $tokenType $value" }
         val t = currentToken
         currentToken = readToken()

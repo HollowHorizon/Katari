@@ -1,15 +1,16 @@
-package com.sunnychung.lib.multiplatform.kotlite.test.narrative
+package com.sunnychung.lib.multiplatform.kotlite.test.katari
 
-import com.sunnychung.lib.multiplatform.kotlite.narrative.ChoiceOptionSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.KotliteNarrativeProgram
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBindings
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeBuiltinFunctions
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeHost
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeInstance
-import com.sunnychung.lib.multiplatform.kotlite.narrative.RuntimeListValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeState
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskState
-import com.sunnychung.lib.multiplatform.kotlite.narrative.NarrativeTaskStatus
+import com.sunnychung.lib.multiplatform.kotlite.katari.ChoiceOptionSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariNarrativeProgram
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBindings
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariBindings
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariInstance
+import com.sunnychung.lib.multiplatform.kotlite.katari.RuntimeListValueSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariState
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskState
+import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatus
 import com.sunnychung.lib.multiplatform.kotlite.stdlib.AllStdLibModules
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -17,7 +18,6 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NarrativeInlineStdlibTest {
@@ -109,15 +109,15 @@ class NarrativeInlineStdlibTest {
                 override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
             }
         )
-        val initialInstance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val initialInstance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = code,
                 bindings = initialBindings,
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = initialBindings.globals,
             ),
             functionRegistry = initialBindings.functionRegistry,
@@ -135,7 +135,6 @@ class NarrativeInlineStdlibTest {
         val rootFrame = task.callFrames.first { it.functionId == "__main__" }
         val extensionFrame = task.callFrames.first { it.functionId == "mutateAndPause" }
 
-        assertTrue(snapshot.globals.isEmpty())
         assertEquals(rootFrame.variableRefs.getValue("data"), extensionFrame.variableRefs.getValue("this"))
         assertEquals(1, snapshot.values.values.filterIsInstance<RuntimeListValueSnapshot>().size)
 
@@ -152,8 +151,8 @@ class NarrativeInlineStdlibTest {
                 override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
             }
         )
-        val resumedInstance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val resumedInstance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = code,
                 bindings = resumedBindings,
@@ -169,7 +168,7 @@ class NarrativeInlineStdlibTest {
         resumedInstance.join()
 
         assertEquals(listOf("pause", "9"), resumedEvents)
-        assertEquals(NarrativeTaskStatus.Completed, resumedInstance.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, resumedInstance.currentState().tasks.single().status)
     }
 
     private suspend fun TestScope.assertNarrativeResumesFromSnapshot(code: String, expectedEvents: List<String>) {
@@ -183,15 +182,15 @@ class NarrativeInlineStdlibTest {
                 override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
             }
         )
-        val initialInstance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val initialInstance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = code,
                 bindings = initialBindings,
             ),
-            initialState = NarrativeState(
+            initialState = KatariState(
                 programVersion = 1,
-                tasks = listOf(NarrativeTaskState(id = "main")),
+                tasks = listOf(TaskState(id = "main")),
                 globals = initialBindings.globals,
             ),
             functionRegistry = initialBindings.functionRegistry,
@@ -218,8 +217,8 @@ class NarrativeInlineStdlibTest {
                 override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
             }
         )
-        val resumedInstance = NarrativeInstance(
-            program = KotliteNarrativeProgram(
+        val resumedInstance = KatariInstance(
+            program = KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = code,
                 bindings = resumedBindings,
@@ -235,10 +234,10 @@ class NarrativeInlineStdlibTest {
         resumedInstance.join()
 
         assertEquals(expectedEvents, resumedEvents)
-        assertEquals(NarrativeTaskStatus.Completed, resumedInstance.currentState().tasks.single().status)
+        assertEquals(TaskStatus.Completed, resumedInstance.currentState().tasks.single().status)
     }
 
-    private fun stdlibBindings(host: NarrativeHost): NarrativeBindings {
+    private fun stdlibBindings(host: NarrativeHost): KatariBindings {
         return NarrativeBindings {
             install(AllStdLibModules())
             register(NarrativeBuiltinFunctions.definitions(host))

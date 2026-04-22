@@ -10,6 +10,7 @@ import com.sunnychung.lib.multiplatform.kotlite.test.lexer
 import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 fun semanticAnalyzer(code: String, environment: ExecutionEnvironment = ExecutionEnvironment()) = SemanticAnalyzer(Parser(lexer(code)).script(), environment)
 fun assertSemanticFail(code: String, environment: ExecutionEnvironment = ExecutionEnvironment()) {
@@ -667,5 +668,19 @@ class SemanticAnalyzerTest {
         assertSemanticFail("""
             var x: Int = 123 as Int?
         """.trimIndent())
+    }
+
+    @Test
+    fun semanticDiagnosticUsesReadablePositionPrefix() {
+        val error = assertFailsWith<SemanticException> {
+            semanticAnalyzer("""
+                val x = missing
+            """.trimIndent()).analyze()
+        }
+
+        assertTrue(error.message!!.contains("[<Test>:"))
+        assertTrue(error.message!!.contains("Semantic error:"))
+        assertTrue(error.message!!.contains("missing"))
+        assertTrue(!error.message!!.contains(" at ["))
     }
 }

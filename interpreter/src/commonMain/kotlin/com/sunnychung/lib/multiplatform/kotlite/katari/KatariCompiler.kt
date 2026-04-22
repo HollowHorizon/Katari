@@ -1,4 +1,4 @@
-package com.sunnychung.lib.multiplatform.kotlite.narrative
+package com.sunnychung.lib.multiplatform.kotlite.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.model.ASTNode
 import com.sunnychung.lib.multiplatform.kotlite.model.AssignmentNode
@@ -37,8 +37,9 @@ import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
+import kotlin.math.abs
 
-class NarrativeCompiler(
+class KatariCompiler(
     private val inlineEnvironmentFunctions: List<FunctionDeclarationNode> = emptyList(),
 ) {
 
@@ -51,7 +52,7 @@ class NarrativeCompiler(
     private val lambdaBindings = ArrayDeque<MutableMap<String, String?>>()
     private val frameIdStack = ArrayDeque<Int>()
 
-    fun compile(script: ScriptNode): NarrativeProgram {
+    fun compile(script: ScriptNode): KatariProgram {
         temporarySlotCounter = 0
         lambdaCounter = 0
         nextFrameIdCounter = ROOT_CALL_FRAME_ID
@@ -63,19 +64,19 @@ class NarrativeCompiler(
 
         collectTopLevelUserFunctions(script)
 
-        val instructions = mutableListOf<NarrativeInstruction>()
+        val instructions = mutableListOf<KatariInstruction>()
         compileStatementsInScope(script.nodes.filterNot { it is FunctionDeclarationNode }, instructions, isFunctionBoundary = true)
         instructions += EndInstruction(position = script.position)
-        return NarrativeProgram(instructions = instructions)
+        return KatariProgram(instructions = instructions)
     }
 
-    private fun compileStatements(statements: List<ASTNode>, instructions: MutableList<NarrativeInstruction>) {
+    private fun compileStatements(statements: List<ASTNode>, instructions: MutableList<KatariInstruction>) {
         statements.forEach { compileStatement(it, instructions) }
     }
 
     private fun compileStatementsInScope(
         statements: List<ASTNode>,
-        instructions: MutableList<NarrativeInstruction>,
+        instructions: MutableList<KatariInstruction>,
         isFunctionBoundary: Boolean = false,
         shadowedNames: Set<String> = emptySet(),
         lambdaParameterBindings: Map<String, String> = emptyMap(),
@@ -121,7 +122,7 @@ class NarrativeCompiler(
         }
     }
 
-    private fun compileStatement(statement: ASTNode, instructions: MutableList<NarrativeInstruction>) {
+    private fun compileStatement(statement: ASTNode, instructions: MutableList<KatariInstruction>) {
         when (statement) {
             is ScriptNode -> compileStatementsInScope(statement.nodes, instructions)
             is BlockNode -> compileStatementsInScope(statement.statements, instructions)
@@ -136,12 +137,12 @@ class NarrativeCompiler(
             is NarrativeJumpNode -> compileJump(statement, instructions)
             is NarrativeChooseNode -> compileChoose(statement, instructions)
             is FunctionDeclarationNode -> throw UnsupportedOperationException(
-                "${statement.position} Local narrative function declarations are not supported. Declare functions at top-level only."
+                "${statement.position} Local Katari function declarations are not supported. Declare functions at top-level only."
             )
             is UnaryOpNode -> compileUnaryStatement(statement, instructions)
             is StringLiteralNode -> instructions += CallFunctionInstruction(
                 functionId = "narrate",
-                arguments = listOf(LiteralExpression(NarrativeValue.Text(statement.content))),
+                arguments = listOf(LiteralExpression(KatariValue.Text(statement.content))),
                 position = statement.position,
             )
             is StringNode -> instructions += CallFunctionInstruction(
@@ -154,7 +155,7 @@ class NarrativeCompiler(
                     instructions += compileCall(statement, instructions)
                 }
             }
-            else -> throw UnsupportedOperationException("${statement.position} Narrative compiler does not support `${statement::class.simpleName}` yet")
+            else -> throw UnsupportedOperationException("${statement.position} Katari compiler does not support `${statement::class.simpleName}` yet")
         }
     }
 
@@ -163,10 +164,10 @@ class NarrativeCompiler(
             validateUserFunctionDeclaration(function)
             val existing = userFunctions[function.name].orEmpty()
             require(existing.none { it.receiver == null && function.receiver == null }) {
-                "${function.position} Narrative function `${function.name}` is declared more than once"
+                "${function.position} Katari function `${function.name}` is declared more than once"
             }
             require(existing.none { it.receiver != null && function.receiver != null }) {
-                "${function.position} Narrative extension function `${function.name}` is declared more than once"
+                "${function.position} Katari extension function `${function.name}` is declared more than once"
             }
             userFunctions.getOrPut(function.name) { mutableListOf() } += function
         }
@@ -174,10 +175,10 @@ class NarrativeCompiler(
 
     private fun validateUserFunctionDeclaration(function: FunctionDeclarationNode) {
         require(function.typeParameters.isEmpty() && function.extraTypeParameters.isEmpty()) {
-            "${function.position} Narrative user function `${function.name}` cannot declare type parameters"
+            "${function.position} Katari user function `${function.name}` cannot declare type parameters"
         }
         require(function.body != null) {
-            "${function.position} Narrative user function `${function.name}` must have a body"
+            "${function.position} Katari user function `${function.name}` must have a body"
         }
         validateUserFunctionReturns(function)
     }
@@ -194,7 +195,7 @@ class NarrativeCompiler(
         }
         val lastStatement = body.statements.last()
         require(returnPositions.size == 1 && lastStatement is ReturnNode) {
-            "${function.position} Narrative user function `${function.name}` can only use a single trailing return statement"
+            "${function.position} Katari user function `${function.name}` can only use a single trailing return statement"
         }
     }
 
@@ -213,7 +214,7 @@ class NarrativeCompiler(
 
     private fun compileCheckpoint(
         node: NarrativeCheckpointNode,
-        instructions: MutableList<NarrativeInstruction>,
+        instructions: MutableList<KatariInstruction>,
     ) {
         val currentScope = checkpointScopes.lastOrNull()
             ?: throw IllegalStateException("Checkpoint scope is not initialized")
@@ -224,7 +225,7 @@ class NarrativeCompiler(
 
     private fun compileJump(
         node: NarrativeJumpNode,
-        instructions: MutableList<NarrativeInstruction>,
+        instructions: MutableList<KatariInstruction>,
     ) {
         val currentScope = checkpointScopes.lastOrNull()
             ?: throw IllegalStateException("Checkpoint scope is not initialized")
@@ -253,7 +254,7 @@ class NarrativeCompiler(
 
     private fun compileChoose(
         node: NarrativeChooseNode,
-        instructions: MutableList<NarrativeInstruction>,
+        instructions: MutableList<KatariInstruction>,
     ) {
         require(node.entries.isNotEmpty()) { "Narrative choose block cannot be empty" }
         val choiceVariable = "__narrative_choose_${nextTemporarySlot()}"
@@ -263,13 +264,13 @@ class NarrativeCompiler(
             CompiledChooseEntry(
                 entry = entry,
                 argumentExpression = compileChooseEntryArgument(entry, optionTextExpression, instructions),
-                selectedIdExpression = LiteralExpression(NarrativeValue.Text(indexText)),
+                selectedIdExpression = LiteralExpression(KatariValue.Text(indexText)),
             )
         }
         instructions += CallFunctionInstruction(
             functionId = "chooseIndexed",
             arguments = compiledEntries.map { it.argumentExpression },
-            resultTarget = NarrativeResultTarget.Variable(choiceVariable),
+            resultTarget = ResultTarget.Variable(choiceVariable),
             position = node.position,
         )
 
@@ -278,7 +279,7 @@ class NarrativeCompiler(
             val entry = compiledEntry.entry
             val condition = BinaryExpression(
                 left = VariableExpression(choiceVariable, position = entry.position),
-                operator = NarrativeBinaryOperator.Equals,
+                operator = BinaryOperator.Equals,
                 right = compiledEntry.selectedIdExpression,
                 position = entry.position,
             )
@@ -315,24 +316,24 @@ class NarrativeCompiler(
 
     private fun compileChooseEntryArgument(
         entry: NarrativeChooseEntryNode,
-        textExpression: NarrativeExpression,
-        instructions: MutableList<NarrativeInstruction>,
-    ): NarrativeExpression {
+        textExpression: KatariExpression,
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression {
         if (entry.visibleCondition == null && entry.disableCondition == null) {
             return textExpression
         }
         val slot = nextTemporarySlot()
         val visibleExpression = entry.visibleCondition?.let { compileExpression(it, instructions) }
-            ?: LiteralExpression(NarrativeValue.Bool(true))
+            ?: LiteralExpression(KatariValue.Bool(true))
         val enabledExpression = entry.disableCondition?.let {
             UnaryExpression(
-                operator = NarrativeUnaryOperator.Not,
+                operator = UnaryOperator.Not,
                 operand = compileExpression(it, instructions),
                 position = entry.position,
             )
-        } ?: LiteralExpression(NarrativeValue.Bool(true))
+        } ?: LiteralExpression(KatariValue.Bool(true))
         val disabledTextExpression = entry.disabledText?.let { compileExpression(it, instructions) }
-            ?: LiteralExpression(NarrativeValue.Null)
+            ?: LiteralExpression(KatariValue.Null)
         instructions += CallFunctionInstruction(
             functionId = "choiceOption",
             arguments = listOf(
@@ -341,15 +342,15 @@ class NarrativeCompiler(
                 enabledExpression,
                 disabledTextExpression,
             ),
-            resultTarget = NarrativeResultTarget.Slot(slot),
+            resultTarget = ResultTarget.Slot(slot),
             position = entry.position,
         )
         return SlotExpression(slot)
     }
 
-    private fun compilePropertyDeclaration(node: PropertyDeclarationNode, instructions: MutableList<NarrativeInstruction>) {
+    private fun compilePropertyDeclaration(node: PropertyDeclarationNode, instructions: MutableList<KatariInstruction>) {
         val initialValue = node.initialValue
-            ?: throw UnsupportedOperationException("Narrative property `${node.name}` requires an initializer")
+            ?: throw UnsupportedOperationException("Katari property `${node.name}` requires an initializer")
         val targetName = resolveVariableName(node.name)
         when {
             initialValue is LambdaLiteralNode -> {
@@ -372,14 +373,14 @@ class NarrativeCompiler(
                     callPosition = initialValue.position,
                     argumentExpressions = invocation.argumentExpressions,
                     instructions = instructions,
-                    resultTarget = NarrativeResultTarget.Variable(targetName),
+                    resultTarget = ResultTarget.Variable(targetName),
                     receiverExpression = invocation.receiverExpression,
                 )
             } else {
                 instructions += compileCall(
                     node = initialValue,
                     instructions = instructions,
-                    resultTarget = NarrativeResultTarget.Variable(targetName),
+                    resultTarget = ResultTarget.Variable(targetName),
                 )
             }
             return
@@ -391,7 +392,7 @@ class NarrativeCompiler(
         )
     }
 
-    private fun compileAssignment(node: AssignmentNode, instructions: MutableList<NarrativeInstruction>) {
+    private fun compileAssignment(node: AssignmentNode, instructions: MutableList<KatariInstruction>) {
         when (node.operator) {
             "=" -> {
                 when (val target = node.subject) {
@@ -406,14 +407,14 @@ class NarrativeCompiler(
                                     callPosition = node.value.position,
                                     argumentExpressions = invocation.argumentExpressions,
                                     instructions = instructions,
-                                    resultTarget = NarrativeResultTarget.Variable(targetName),
+                                    resultTarget = ResultTarget.Variable(targetName),
                                     receiverExpression = invocation.receiverExpression,
                                 )
                             } else {
                                 instructions += compileCall(
                                     node = node.value,
                                     instructions = instructions,
-                                    resultTarget = NarrativeResultTarget.Variable(targetName),
+                                    resultTarget = ResultTarget.Variable(targetName),
                                 )
                             }
                             return
@@ -449,15 +450,15 @@ class NarrativeCompiler(
                         }
                     }
                     else -> throw UnsupportedOperationException(
-                        "Narrative assignment target `${target::class.simpleName}` is not supported"
+                        "Katari assignment target `${target::class.simpleName}` is not supported"
                     )
                 }
             }
             "+=", "-=" -> {
                 val target = node.subject as? VariableReferenceNode
-                    ?: throw UnsupportedOperationException("Narrative assignment target must be a variable reference")
+                    ?: throw UnsupportedOperationException("Katari assignment target must be a variable reference")
                 val targetName = resolveVariableName(target.variableName)
-                val operator = if (node.operator == "+=") NarrativeBinaryOperator.Add else NarrativeBinaryOperator.Subtract
+                val operator = if (node.operator == "+=") BinaryOperator.Add else BinaryOperator.Subtract
                 instructions += SetVariableInstruction(
                     name = targetName,
                     expression = BinaryExpression(
@@ -469,13 +470,13 @@ class NarrativeCompiler(
                     position = node.position,
                 )
             }
-            else -> throw UnsupportedOperationException("e${node.position}: Narrative assignment `${node.operator}` is not supported yet")
+            else -> throw UnsupportedOperationException("e${node.position}: Katari assignment `${node.operator}` is not supported yet")
         }
     }
 
-    private fun compileIfExpression(node: IfNode, instructions: MutableList<NarrativeInstruction>): NarrativeExpression {
+    private fun compileIfExpression(node: IfNode, instructions: MutableList<KatariInstruction>): KatariExpression {
         val slot = nextTemporarySlot()
-        val target = NarrativeResultTarget.Slot(slot)
+        val target = ResultTarget.Slot(slot)
         val condition = compileExpression(node.condition, instructions)
         val conditionalIndex = instructions.size
         instructions += ConditionalJumpInstruction(
@@ -500,12 +501,12 @@ class NarrativeCompiler(
 
     private fun compileBranchExpression(
         block: BlockNode?,
-        target: NarrativeResultTarget,
-        instructions: MutableList<NarrativeInstruction>,
+        target: ResultTarget,
+        instructions: MutableList<KatariInstruction>,
     ) {
         val statements = block?.statements ?: listOf(NullNode)
         if (statements.isEmpty()) {
-            instructions += SetResultInstruction(target, LiteralExpression(NarrativeValue.Null), block?.position)
+            instructions += SetResultInstruction(target, LiteralExpression(KatariValue.Null), block?.position)
             return
         }
         statements.dropLast(1).forEach { compileStatement(it, instructions) }
@@ -514,8 +515,8 @@ class NarrativeCompiler(
 
     private fun compileExpressionIntoTarget(
         expression: ASTNode,
-        target: NarrativeResultTarget,
-        instructions: MutableList<NarrativeInstruction>,
+        target: ResultTarget,
+        instructions: MutableList<KatariInstruction>,
     ) {
         if (expression is FunctionCallNode) {
             val invocation = resolveInlineCapableFunctionInvocation(expression, instructions)
@@ -544,7 +545,7 @@ class NarrativeCompiler(
         )
     }
 
-    private fun compileWhile(node: WhileNode, instructions: MutableList<NarrativeInstruction>) {
+    private fun compileWhile(node: WhileNode, instructions: MutableList<KatariInstruction>) {
         val loopStart = instructions.size
         val loopContext = LoopContext(continueTarget = loopStart)
         loopContexts.addLast(loopContext)
@@ -570,7 +571,7 @@ class NarrativeCompiler(
         loopContexts.removeLast()
     }
 
-    private fun compileFor(node: ForNode, instructions: MutableList<NarrativeInstruction>) {
+    private fun compileFor(node: ForNode, instructions: MutableList<KatariInstruction>) {
         val iteratorName = "__narrative_for_iterator_${nextTemporarySlot()}"
         val valueName = "__narrative_for_value_${nextTemporarySlot()}"
         val loopVariableNames = node.variables.map { resolveVariableName(it.name) }
@@ -578,7 +579,7 @@ class NarrativeCompiler(
         instructions += CallFunctionInstruction(
             functionId = "iterator",
             arguments = listOf(compileExpression(node.subject, instructions)),
-            resultTarget = NarrativeResultTarget.Variable(iteratorName),
+            resultTarget = ResultTarget.Variable(iteratorName),
             position = node.position,
         )
 
@@ -589,7 +590,7 @@ class NarrativeCompiler(
         instructions += CallFunctionInstruction(
             functionId = "hasNext",
             arguments = listOf(VariableExpression(iteratorName, position = node.position)),
-            resultTarget = NarrativeResultTarget.Slot(hasNextSlot),
+            resultTarget = ResultTarget.Slot(hasNextSlot),
             position = node.position,
         )
         val conditionalIndex = instructions.size
@@ -601,7 +602,7 @@ class NarrativeCompiler(
         instructions += CallFunctionInstruction(
             functionId = "next",
             arguments = listOf(VariableExpression(iteratorName, position = node.position)),
-            resultTarget = NarrativeResultTarget.Variable(valueName),
+            resultTarget = ResultTarget.Variable(valueName),
             position = node.position,
         )
         loopVariableNames.forEach { variableName ->
@@ -639,16 +640,16 @@ class NarrativeCompiler(
         loopContexts.removeLast()
     }
 
-    private fun compileBreak(node: BreakNode, instructions: MutableList<NarrativeInstruction>) {
+    private fun compileBreak(node: BreakNode, instructions: MutableList<KatariInstruction>) {
         val loopContext = loopContexts.lastOrNull()
-            ?: throw UnsupportedOperationException("Narrative `break` can only be used inside a loop")
+            ?: throw UnsupportedOperationException("Katari `break` can only be used inside a loop")
         loopContext.breakJumpIndices += instructions.size
         instructions += JumpInstruction(target = -1, position = node.position)
     }
 
-    private fun compileContinue(node: ContinueNode, instructions: MutableList<NarrativeInstruction>) {
+    private fun compileContinue(node: ContinueNode, instructions: MutableList<KatariInstruction>) {
         val loopContext = loopContexts.lastOrNull()
-            ?: throw UnsupportedOperationException("Narrative `continue` can only be used inside a loop")
+            ?: throw UnsupportedOperationException("Katari `continue` can only be used inside a loop")
         val continueTarget = loopContext.continueTarget
         if (continueTarget != null) {
             instructions += JumpInstruction(target = continueTarget, position = node.position)
@@ -660,7 +661,7 @@ class NarrativeCompiler(
 
     private fun patchContinueJumps(
         loopContext: LoopContext,
-        instructions: MutableList<NarrativeInstruction>,
+        instructions: MutableList<KatariInstruction>,
     ) {
         val continueTarget = loopContext.continueTarget ?: return
         loopContext.continueJumpIndices.forEach { continueIndex ->
@@ -671,7 +672,7 @@ class NarrativeCompiler(
         }
     }
 
-    private fun compileIf(node: IfNode, instructions: MutableList<NarrativeInstruction>) {
+    private fun compileIf(node: IfNode, instructions: MutableList<KatariInstruction>) {
         val condition = compileExpression(node.condition, instructions)
         val conditionalIndex = instructions.size
         instructions += ConditionalJumpInstruction(
@@ -701,22 +702,22 @@ class NarrativeCompiler(
         }
     }
 
-    private fun compileUnaryStatement(node: UnaryOpNode, instructions: MutableList<NarrativeInstruction>) {
+    private fun compileUnaryStatement(node: UnaryOpNode, instructions: MutableList<KatariInstruction>) {
         when (node.operator) {
             "pre++", "post++", "pre--", "post--" -> {
                 compileIncDecExpression(node, instructions)
             }
             else -> throw UnsupportedOperationException(
-                "Narrative unary statement `${node.operator}` is not supported"
+                "Katari unary statement `${node.operator}` is not supported"
             )
         }
     }
 
     private fun compileCall(
         node: FunctionCallNode,
-        instructions: MutableList<NarrativeInstruction>,
-        resultTarget: NarrativeResultTarget? = null,
-    ): NarrativeInstruction {
+        instructions: MutableList<KatariInstruction>,
+        resultTarget: ResultTarget? = null,
+    ): KatariInstruction {
         val arguments = node.arguments.map { compileExpression(it.value, instructions) }
         require(arguments.none { it is LambdaLiteralExpression }) {
             "${node.position} Passing lambda arguments to external narrative functions is not supported yet"
@@ -736,32 +737,32 @@ class NarrativeCompiler(
                     position = node.position,
                 )
             }
-            else -> throw UnsupportedOperationException("Narrative call `${function::class.simpleName}` is not supported")
+            else -> throw UnsupportedOperationException("Katari call `${function::class.simpleName}` is not supported")
         }
     }
 
     private fun compileUserFunctionInvocation(
         declaration: FunctionDeclarationNode,
         callPosition: SourcePosition,
-        argumentExpressions: List<NarrativeExpression>,
-        instructions: MutableList<NarrativeInstruction>,
-        resultTarget: NarrativeResultTarget?,
-        receiverExpression: NarrativeExpression? = null,
+        argumentExpressions: List<KatariExpression>,
+        instructions: MutableList<KatariInstruction>,
+        resultTarget: ResultTarget?,
+        receiverExpression: KatariExpression? = null,
     ) {
         val functionName = declaration.name
         require(argumentExpressions.size == declaration.valueParameters.size) {
-            "${callPosition} Narrative user function `${functionName}` expects ${declaration.valueParameters.size} arguments but got ${argumentExpressions.size}"
+            "$callPosition Katari user function `${functionName}` expects ${declaration.valueParameters.size} arguments but got ${argumentExpressions.size}"
         }
         require((declaration.receiver != null) == (receiverExpression != null)) {
             if (declaration.receiver != null) {
-                "${callPosition} Narrative extension function `${functionName}` requires a receiver"
+                "$callPosition Katari extension function `${functionName}` requires a receiver"
             } else {
-                "${callPosition} Narrative function `${functionName}` does not accept a receiver"
+                "$callPosition Katari function `${functionName}` does not accept a receiver"
             }
         }
 
         val body = declaration.body
-            ?: throw UnsupportedOperationException("${declaration.position} Narrative user function `${functionName}` must have a body")
+            ?: throw UnsupportedOperationException("${declaration.position} Katari user function `${functionName}` must have a body")
 
         val parameterNames = declaration.valueParameters.map { it.name }
         val lambdaParameterBindings = parameterNames.mapIndexedNotNull { index, parameterName ->
@@ -800,7 +801,7 @@ class NarrativeCompiler(
             trailingReturnValue?.let {
                 compileExpressionIntoTarget(
                     expression = it,
-                    target = NarrativeResultTarget.Slot(nextTemporarySlot()),
+                    target = ResultTarget.Slot(nextTemporarySlot()),
                     instructions = instructions,
                 )
             }
@@ -823,9 +824,9 @@ class NarrativeCompiler(
             when (last) {
                 is ReturnNode -> {
                     val returnValue = last.value ?: NullNode
-                    compileExpressionIntoTarget(returnValue, NarrativeResultTarget.Variable(returnName), instructions)
+                    compileExpressionIntoTarget(returnValue, ResultTarget.Variable(returnName), instructions)
                 }
-                else -> compileExpressionIntoTarget(last, NarrativeResultTarget.Variable(returnName), instructions)
+                else -> compileExpressionIntoTarget(last, ResultTarget.Variable(returnName), instructions)
             }
             instructions += ExitCallFrameInstruction(
                 returnExpression = VariableExpression(returnName, position = last.position),
@@ -844,7 +845,7 @@ class NarrativeCompiler(
         statements.forEachIndexed { index, statement ->
             if (statement is ReturnNode) {
                 require(index == statements.lastIndex) {
-                    "${statement.position} Narrative user function `${functionName}` only supports trailing return"
+                    "${statement.position} Katari user function `${functionName}` only supports trailing return"
                 }
                 return
             }
@@ -857,12 +858,12 @@ class NarrativeCompiler(
     ) {
         val statements = body.statements
         require(statements.isNotEmpty()) {
-            "${body.position} Narrative user function `${functionName}` must have a non-empty body to return a value"
+            "${body.position} Katari user function `${functionName}` must have a non-empty body to return a value"
         }
 
         statements.dropLast(1).forEach { statement ->
             require(statement !is ReturnNode) {
-                "${statement.position} Narrative user function `${functionName}` only supports trailing return"
+                "${statement.position} Katari user function `${functionName}` only supports trailing return"
             }
         }
     }
@@ -873,7 +874,7 @@ class NarrativeCompiler(
 
     private fun compileInlineCapableFunctionCall(
         node: FunctionCallNode,
-        instructions: MutableList<NarrativeInstruction>,
+        instructions: MutableList<KatariInstruction>,
     ): Boolean {
         val invocation = resolveInlineCapableFunctionInvocation(node, instructions) ?: return false
         compileUserFunctionInvocation(
@@ -889,7 +890,7 @@ class NarrativeCompiler(
 
     private fun resolveInlineCapableFunctionInvocation(
         node: FunctionCallNode,
-        instructions: MutableList<NarrativeInstruction>,
+        instructions: MutableList<KatariInstruction>,
     ): ResolvedUserFunctionInvocation? {
         return resolveUserFunctionInvocation(node, instructions)
             ?: resolveEnvironmentInlineFunctionInvocation(node, instructions)
@@ -897,7 +898,7 @@ class NarrativeCompiler(
 
     private fun resolveUserFunctionInvocation(
         node: FunctionCallNode,
-        instructions: MutableList<NarrativeInstruction>,
+        instructions: MutableList<KatariInstruction>,
     ): ResolvedUserFunctionInvocation? {
         return when (val function = node.function) {
             is VariableReferenceNode -> {
@@ -920,13 +921,13 @@ class NarrativeCompiler(
         }
     }
 
-    private fun compileExpression(expression: ASTNode, instructions: MutableList<NarrativeInstruction>): NarrativeExpression {
+    private fun compileExpression(expression: ASTNode, instructions: MutableList<KatariInstruction>): KatariExpression {
         return when (expression) {
-            is BooleanNode -> LiteralExpression(NarrativeValue.Bool(expression.value), position = expression.position)
-            is IntegerNode -> LiteralExpression(NarrativeValue.Int32(expression.value), position = expression.position)
-            is DoubleNode -> LiteralExpression(NarrativeValue.Float64(expression.value), position = expression.position)
-            NullNode -> LiteralExpression(NarrativeValue.Null, position = expression.position)
-            is StringLiteralNode -> LiteralExpression(NarrativeValue.Text(expression.content), position = expression.position)
+            is BooleanNode -> LiteralExpression(KatariValue.Bool(expression.value), position = expression.position)
+            is IntegerNode -> LiteralExpression(KatariValue.Int32(expression.value), position = expression.position)
+            is DoubleNode -> LiteralExpression(KatariValue.Float64(expression.value), position = expression.position)
+            NullNode -> LiteralExpression(KatariValue.Null, position = expression.position)
+            is StringLiteralNode -> LiteralExpression(KatariValue.Text(expression.content), position = expression.position)
             is StringNode -> compileStringExpression(expression, instructions)
             is StringFieldIdentifierNode -> VariableExpression(resolveVariableName(expression.variableName), position = expression.position)
             is VariableReferenceNode -> VariableExpression(resolveVariableName(expression.variableName), position = expression.position)
@@ -944,7 +945,7 @@ class NarrativeCompiler(
                         callPosition = expression.position,
                         argumentExpressions = invocation.argumentExpressions,
                         instructions = instructions,
-                        resultTarget = NarrativeResultTarget.Slot(slot),
+                        resultTarget = ResultTarget.Slot(slot),
                         receiverExpression = invocation.receiverExpression,
                     )
                     return SlotExpression(slot, position = expression.position)
@@ -953,7 +954,7 @@ class NarrativeCompiler(
                 instructions += compileCall(
                     node = expression,
                     instructions = instructions,
-                    resultTarget = NarrativeResultTarget.Slot(slot),
+                    resultTarget = ResultTarget.Slot(slot),
                 )
                 SlotExpression(slot, position = expression.position)
             }
@@ -982,7 +983,7 @@ class NarrativeCompiler(
                         instructions = instructions,
                     )
                     "is", "!is", "in", "!in" -> throw UnsupportedOperationException(
-                        "Infix operator `${expression.functionName}` is not supported in narrative expressions"
+                        "Infix operator `${expression.functionName}` is not supported in Katari expressions"
                     )
                     else -> {
                         val slot = nextTemporarySlot()
@@ -992,7 +993,7 @@ class NarrativeCompiler(
                                 compileExpression(expression.node1, instructions),
                                 compileExpression(expression.node2, instructions),
                             ),
-                            resultTarget = NarrativeResultTarget.Slot(slot),
+                            resultTarget = ResultTarget.Slot(slot),
                             position = expression.position,
                         )
                         SlotExpression(slot, position = expression.position)
@@ -1004,11 +1005,11 @@ class NarrativeCompiler(
                     "pre++", "post++", "pre--", "post--" -> compileIncDecExpression(expression, instructions)
                     else -> {
                         val operator = when (expression.operator) {
-                            "+" -> NarrativeUnaryOperator.Plus
-                            "-" -> NarrativeUnaryOperator.Minus
-                            "!" -> NarrativeUnaryOperator.Not
+                            "+" -> UnaryOperator.Plus
+                            "-" -> UnaryOperator.Minus
+                            "!" -> UnaryOperator.Not
                             else -> throw UnsupportedOperationException(
-                                "Unary operator `${expression.operator}` is not supported in narrative expressions"
+                                "Unary operator `${expression.operator}` is not supported in Katari expressions"
                             )
                         }
                         val operand = expression.node
@@ -1023,20 +1024,20 @@ class NarrativeCompiler(
             }
             is BinaryOpNode -> {
                 val operator = when (expression.operator) {
-                    "+" -> NarrativeBinaryOperator.Add
-                    "-" -> NarrativeBinaryOperator.Subtract
-                    "*" -> NarrativeBinaryOperator.Multiply
-                    "/" -> NarrativeBinaryOperator.Divide
-                    "%" -> NarrativeBinaryOperator.Remainder
-                    "<" -> NarrativeBinaryOperator.LessThan
-                    "<=" -> NarrativeBinaryOperator.LessThanOrEquals
-                    ">" -> NarrativeBinaryOperator.GreaterThan
-                    ">=" -> NarrativeBinaryOperator.GreaterThanOrEquals
-                    "==" -> NarrativeBinaryOperator.Equals
-                    "!=" -> NarrativeBinaryOperator.NotEquals
-                    "&&" -> NarrativeBinaryOperator.And
-                    "||" -> NarrativeBinaryOperator.Or
-                    else -> throw UnsupportedOperationException("Binary operator `${expression.operator}` is not supported in narrative expressions")
+                    "+" -> BinaryOperator.Add
+                    "-" -> BinaryOperator.Subtract
+                    "*" -> BinaryOperator.Multiply
+                    "/" -> BinaryOperator.Divide
+                    "%" -> BinaryOperator.Remainder
+                    "<" -> BinaryOperator.LessThan
+                    "<=" -> BinaryOperator.LessThanOrEquals
+                    ">" -> BinaryOperator.GreaterThan
+                    ">=" -> BinaryOperator.GreaterThanOrEquals
+                    "==" -> BinaryOperator.Equals
+                    "!=" -> BinaryOperator.NotEquals
+                    "&&" -> BinaryOperator.And
+                    "||" -> BinaryOperator.Or
+                    else -> throw UnsupportedOperationException("Binary operator `${expression.operator}` is not supported in Katari expressions")
                 }
                 BinaryExpression(
                     left = compileExpression(expression.node1, instructions),
@@ -1045,21 +1046,21 @@ class NarrativeCompiler(
                     position = expression.position,
                 )
             }
-            else -> throw UnsupportedOperationException("${expression.position} Narrative expression `${expression::class.simpleName}` is not supported")
+            else -> throw UnsupportedOperationException("${expression.position} Katari expression `${expression::class.simpleName}` is not supported")
         }
     }
 
     private fun compileExternalExpressionCall(
         functionId: String,
-        arguments: List<NarrativeExpression>,
+        arguments: List<KatariExpression>,
         position: SourcePosition,
-        instructions: MutableList<NarrativeInstruction>,
-    ): NarrativeExpression {
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression {
         val slot = nextTemporarySlot()
         instructions += CallFunctionInstruction(
             functionId = functionId,
             arguments = arguments,
-            resultTarget = NarrativeResultTarget.Slot(slot),
+            resultTarget = ResultTarget.Slot(slot),
             position = position,
         )
         return SlotExpression(slot, position = position)
@@ -1068,8 +1069,8 @@ class NarrativeCompiler(
     private fun compileArgumentExpression(
         argument: FunctionCallArgumentNode,
         expectedParameter: FunctionValueParameterNode?,
-        instructions: MutableList<NarrativeInstruction>,
-    ): NarrativeExpression {
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression {
         val expectedType = expectedParameter?.type as? FunctionTypeNode
         val value = argument.value
         if (value is LambdaLiteralNode && expectedType != null) {
@@ -1101,7 +1102,7 @@ class NarrativeCompiler(
         }
         if (expectedType != null && expectedParameterTypes.size != valueParametersWithExpectedTypes.size) {
             throw IllegalArgumentException(
-                "${lambda.position} Narrative lambda expects ${expectedParameterTypes.size} parameter(s), got ${valueParametersWithExpectedTypes.size}"
+                "${lambda.position} Katari lambda expects ${expectedParameterTypes.size} parameter(s), got ${valueParametersWithExpectedTypes.size}"
             )
         }
         val valueParameters = valueParametersWithExpectedTypes.mapIndexed { index, parameter ->
@@ -1113,7 +1114,7 @@ class NarrativeCompiler(
         }
         valueParameters.forEach { parameter ->
             require(parameter.declaredType != null) {
-                "${parameter.position} Narrative lambda parameter `${parameter.name}` must declare explicit type"
+                "${parameter.position} Katari lambda parameter `${parameter.name}` must declare explicit type"
             }
         }
         val id = "__narrative_lambda_${lambdaCounter++}"
@@ -1157,7 +1158,7 @@ class NarrativeCompiler(
 
     private fun resolveEnvironmentInlineFunctionInvocation(
         node: FunctionCallNode,
-        instructions: MutableList<NarrativeInstruction>,
+        instructions: MutableList<KatariInstruction>,
     ): ResolvedUserFunctionInvocation? {
         return when (val function = node.function) {
             is VariableReferenceNode -> {
@@ -1209,8 +1210,8 @@ class NarrativeCompiler(
 
     private fun compileStringExpression(
         node: StringNode,
-        instructions: MutableList<NarrativeInstruction>,
-    ): NarrativeExpression {
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression {
         if (node.nodes.size == 1 && node.nodes.first() is StringLiteralNode) {
             return compileExpression(node.nodes.first(), instructions)
         }
@@ -1219,7 +1220,7 @@ class NarrativeCompiler(
             .reduce { acc, part ->
                 BinaryExpression(
                     left = acc,
-                    operator = NarrativeBinaryOperator.Add,
+                    operator = BinaryOperator.Add,
                     right = part,
                     position = node.position,
                 )
@@ -1228,8 +1229,8 @@ class NarrativeCompiler(
 
     private fun compileIncDecExpression(
         node: UnaryOpNode,
-        instructions: MutableList<NarrativeInstruction>,
-    ): NarrativeExpression {
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression {
         val operand = node.node
             ?: throw UnsupportedOperationException("Unary operator `${node.operator}` requires an operand")
         val variableName = (operand as? VariableReferenceNode)?.variableName?.let { resolveVariableName(it) }
@@ -1243,8 +1244,8 @@ class NarrativeCompiler(
         }
         val updateExpression = BinaryExpression(
             left = VariableExpression(variableName),
-            operator = if (delta > 0) NarrativeBinaryOperator.Add else NarrativeBinaryOperator.Subtract,
-            right = LiteralExpression(NarrativeValue.Int32(kotlin.math.abs(delta))),
+            operator = if (delta > 0) BinaryOperator.Add else BinaryOperator.Subtract,
+            right = LiteralExpression(KatariValue.Int32(abs(delta))),
             position = node.position,
         )
         return when (node.operator) {
@@ -1259,11 +1260,11 @@ class NarrativeCompiler(
             "post++", "post--" -> {
                 val slot = nextTemporarySlot()
                 instructions += SetResultInstruction(
-                    target = NarrativeResultTarget.Slot(slot),
+                    target = ResultTarget.Slot(slot),
                     expression = BinaryExpression(
                         left = VariableExpression(variableName),
-                        operator = NarrativeBinaryOperator.Add,
-                        right = LiteralExpression(NarrativeValue.Int32(0)),
+                        operator = BinaryOperator.Add,
+                        right = LiteralExpression(KatariValue.Int32(0)),
                         position = node.position,
                     ),
                     position = node.position,
@@ -1306,14 +1307,14 @@ private data class UnresolvedJump(
 
 private data class CompiledChooseEntry(
     val entry: NarrativeChooseEntryNode,
-    val argumentExpression: NarrativeExpression,
-    val selectedIdExpression: NarrativeExpression,
+    val argumentExpression: KatariExpression,
+    val selectedIdExpression: KatariExpression,
 )
 
 private data class ResolvedUserFunctionInvocation(
     val declaration: FunctionDeclarationNode,
-    val receiverExpression: NarrativeExpression?,
-    val argumentExpressions: List<NarrativeExpression>,
+    val receiverExpression: KatariExpression?,
+    val argumentExpressions: List<KatariExpression>,
 )
 
 private fun FunctionDeclarationNode.isNarrativeVararg(): Boolean {
