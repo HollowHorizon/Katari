@@ -8,7 +8,16 @@ import co.touchlab.kermit.platformLogWriter
 
 internal val log = Logger(
     config = object : MutableLoggerConfig {
-        override var logWriterList: List<LogWriter> = listOf(platformLogWriter())
+        override var logWriterList: List<LogWriter> = listOf(object : LogWriter() {
+            override fun log(
+                severity: Severity,
+                message: String,
+                tag: String,
+                throwable: Throwable?,
+            ) {
+                println("[$severity]: $message ($tag) #$throwable")
+            }
+        })
         override var minSeverity: Severity = Severity.Info
     },
     tag = "kotlite",
