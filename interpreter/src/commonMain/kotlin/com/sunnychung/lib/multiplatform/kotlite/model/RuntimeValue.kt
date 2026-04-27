@@ -78,6 +78,46 @@ class ByteValue(override val value: Byte, symbolTable: SymbolTable) : NumberValu
     }
 }
 
+class ShortValue(override val value: Short, symbolTable: SymbolTable) : NumberValue<Short>, PrimitiveValue(symbolTable) {
+
+    override fun primitiveType(rootSymbolTable: SymbolTable) = rootSymbolTable.ShortType
+    override fun convertToString() = value.toString()
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is ShortValue) return false
+
+        if (value != other.value) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        return value.hashCode()
+    }
+}
+
+class FloatValue(override val value: Float, symbolTable: SymbolTable) : NumberValue<Float>, PrimitiveValue(symbolTable) {
+
+    override fun primitiveType(rootSymbolTable: SymbolTable) = rootSymbolTable.ShortType
+    override fun convertToString() = value.toString()
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is FloatValue) return false
+
+        if (value != other.value) return false
+
+        return true
+    }
+
+    override fun hashCode(): Int {
+        return value.hashCode()
+    }
+}
+
+
+
 class StringValue(override val value: String, symbolTable: SymbolTable) : ComparableRuntimeValueHolder<String, String>, PrimitiveValue(symbolTable) {
 
     override fun primitiveType(rootSymbolTable: SymbolTable) = rootSymbolTable.StringType

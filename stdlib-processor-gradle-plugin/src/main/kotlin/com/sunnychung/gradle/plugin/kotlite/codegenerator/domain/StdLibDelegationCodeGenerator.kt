@@ -80,6 +80,8 @@ import com.sunnychung.lib.multiplatform.kotlite.model.PrimitiveTypeName
 import com.sunnychung.lib.multiplatform.kotlite.model.ProvidedClassDefinition
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.FloatValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ShortValue
 import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameter
 import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameterType
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
@@ -357,10 +359,14 @@ internal class ScopedDelegationCodeGenerator(private val typeParameterNodes: Lis
                 } else it
             }
         } else if (type.name == "Comparable") {
-            "$variableName as ComparableRuntimeValue<Comparable<Any>, Any>".let {
-                if (isNullAware && type.isNullable) {
-                    "($it)$unwrapNullable"
-                } else it
+            if (type.isNullable) {
+                "$variableName as? ComparableRuntimeValue<Comparable<Any>, Any>"
+            } else {
+                "$variableName as ComparableRuntimeValue<Comparable<Any>, Any>".let {
+                    if (isNullAware) {
+                        "($it)$unwrapNullable"
+                    } else it
+                }
             }
         } else {
             if (type.isPrimitive()) {

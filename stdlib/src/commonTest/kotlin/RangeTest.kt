@@ -128,6 +128,39 @@ class RangeTest {
     }
 
     @Test
+    fun customClassComparableCoerceFunctions() {
+        val env = ExecutionEnvironment().apply {
+            install(RangeLibModule())
+        }
+        val interpreter = interpreter("""
+            class A(val x: Int) : Comparable<A> {
+                override operator fun compareTo(o: A): Int {
+                    return x.compareTo(o.x)
+                }
+            }
+            val low = A(3)
+            val high = A(15)
+            val inside = A(9)
+            val a: Int = A(2).coerceAtLeast(low).x
+            val b: Int = A(20).coerceAtMost(high).x
+            val c: Int = A(2).coerceIn(low, high).x
+            val d: Int = A(20).coerceIn(low..high).x
+            val e: Int = inside.coerceIn(low, high).x
+            val f: Int = inside.coerceIn(null, high).x
+            val g: Int = inside.coerceIn(low, null).x
+        """.trimIndent(), executionEnvironment = env, isDebug = true)
+        interpreter.eval()
+        val symbolTable = interpreter.symbolTable()
+        assertEquals(3, (symbolTable.findPropertyByDeclaredName("a") as IntValue).value)
+        assertEquals(15, (symbolTable.findPropertyByDeclaredName("b") as IntValue).value)
+        assertEquals(3, (symbolTable.findPropertyByDeclaredName("c") as IntValue).value)
+        assertEquals(15, (symbolTable.findPropertyByDeclaredName("d") as IntValue).value)
+        assertEquals(9, (symbolTable.findPropertyByDeclaredName("e") as IntValue).value)
+        assertEquals(9, (symbolTable.findPropertyByDeclaredName("f") as IntValue).value)
+        assertEquals(9, (symbolTable.findPropertyByDeclaredName("g") as IntValue).value)
+    }
+
+    @Test
     fun intLongClosedRangeContainsOperatorFirstLastProperty() {
         listOf("Int", "Long").forEach { type ->
             val l = if (type == "Long") "L" else ""
@@ -201,6 +234,56 @@ class RangeTest {
             assertEquals(3.cast(), (symbolTable.findPropertyByDeclaredName("start") as NumberValue<*>).value)
             assertEquals(14.cast(), (symbolTable.findPropertyByDeclaredName("end") as NumberValue<*>).value)
         }
+    }
+
+    @Test
+    fun intLongCoerceFunctions() {
+        listOf("Int", "Long").forEach { type ->
+            val l = if (type == "Long") "L" else ""
+            val cast: Int.() -> Number = { if (type == "Long") toLong() else this }
+            val env = ExecutionEnvironment().apply {
+                install(RangeLibModule())
+            }
+            val interpreter = interpreter("""
+                val a: $type = 2$l.coerceAtLeast(3$l)
+                val b: $type = 20$l.coerceAtMost(15$l)
+                val c: $type = 2$l.coerceIn(3$l, 15$l)
+                val d: $type = 20$l.coerceIn(3$l..15$l)
+                val e: $type = 9$l.coerceIn(3$l, 15$l)
+            """.trimIndent(), executionEnvironment = env, isDebug = true)
+            interpreter.eval()
+            val symbolTable = interpreter.symbolTable()
+            assertEquals(3.cast(), (symbolTable.findPropertyByDeclaredName("a") as NumberValue<*>).value)
+            assertEquals(15.cast(), (symbolTable.findPropertyByDeclaredName("b") as NumberValue<*>).value)
+            assertEquals(3.cast(), (symbolTable.findPropertyByDeclaredName("c") as NumberValue<*>).value)
+            assertEquals(15.cast(), (symbolTable.findPropertyByDeclaredName("d") as NumberValue<*>).value)
+            assertEquals(9.cast(), (symbolTable.findPropertyByDeclaredName("e") as NumberValue<*>).value)
+        }
+    }
+
+    @Test
+    fun byteDoubleCoerceFunctions() {
+        val env = ExecutionEnvironment().apply {
+            install(AllStdLibModules())
+        }
+        val interpreter = interpreter("""
+            val a: Byte = 2.toByte().coerceAtLeast(3.toByte())
+            val b: Byte = 20.toByte().coerceAtMost(15.toByte())
+            val c: Byte = 2.toByte().coerceIn(3.toByte(), 15.toByte())
+            val d: Double = 2.0.coerceAtLeast(3.5)
+            val e: Double = 20.0.coerceAtMost(15.5)
+            val f: Double = 2.0.coerceIn(3.5, 15.5)
+            val g: Double = 9.0.coerceIn(3.5, 15.5)
+        """.trimIndent(), executionEnvironment = env, isDebug = true)
+        interpreter.eval()
+        val symbolTable = interpreter.symbolTable()
+        assertEquals(3.toByte(), (symbolTable.findPropertyByDeclaredName("a") as NumberValue<*>).value)
+        assertEquals(15.toByte(), (symbolTable.findPropertyByDeclaredName("b") as NumberValue<*>).value)
+        assertEquals(3.toByte(), (symbolTable.findPropertyByDeclaredName("c") as NumberValue<*>).value)
+        assertEquals(3.5, (symbolTable.findPropertyByDeclaredName("d") as NumberValue<*>).value)
+        assertEquals(15.5, (symbolTable.findPropertyByDeclaredName("e") as NumberValue<*>).value)
+        assertEquals(3.5, (symbolTable.findPropertyByDeclaredName("f") as NumberValue<*>).value)
+        assertEquals(9.0, (symbolTable.findPropertyByDeclaredName("g") as NumberValue<*>).value)
     }
 
     @Test

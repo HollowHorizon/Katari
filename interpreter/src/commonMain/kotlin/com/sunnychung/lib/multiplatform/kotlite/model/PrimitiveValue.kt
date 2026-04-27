@@ -1,6 +1,6 @@
 package com.sunnychung.lib.multiplatform.kotlite.model
 
-abstract class PrimitiveValue(symbolTable: SymbolTable) : RuntimeValue {
+abstract class PrimitiveValue(val symbolTable: SymbolTable) : RuntimeValue {
     internal val rootSymbolTable = symbolTable.findScope(0)
 
     val clazz: ClassDefinition = type().clazz
@@ -46,5 +46,5 @@ class PrimitiveType(val typeName: PrimitiveTypeName, isNullable: Boolean, val no
 }
 
 enum class PrimitiveTypeName {
-    Int, Long, Double, Boolean, String, Char, Byte
+    Int, Long, Double, Boolean, String, Char, Byte, Short, Float
 }

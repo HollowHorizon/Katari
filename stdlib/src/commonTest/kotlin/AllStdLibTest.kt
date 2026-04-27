@@ -56,7 +56,7 @@ class AllStdLibTest {
                 it != "MutableList"
             },
             functionRegistrationFilter = {
-                !(it.receiverType ?: "").contains("MutableList") && !it.returnType.contains("MutableList")
+                !(it.receiverType ?: "").contains("MutableList") && !it.returnType.contains("MutableList") && !it.inlineFunctionBody.toString().contains("mutableList")
             },
         ).apply {
             install(AllStdLibModules())

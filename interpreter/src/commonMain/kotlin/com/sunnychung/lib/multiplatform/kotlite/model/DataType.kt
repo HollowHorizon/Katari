@@ -516,6 +516,8 @@ fun TypeNode.toPrimitiveDataType(symbolTable: SymbolTable) = when(this.name) {
     "String" -> if (isNullable) symbolTable.NullableStringType else symbolTable.StringType
     "Char" -> if (isNullable) symbolTable.NullableCharType else symbolTable.CharType
     "Byte" -> if (isNullable) symbolTable.NullableByteType else symbolTable.ByteType
+    "Short" -> if (isNullable) symbolTable.NullableShortType else symbolTable.ShortType
+    "Float" -> if (isNullable) symbolTable.NullableFloatType else symbolTable.FloatType
     "Unit" -> UnitType(isNullable = isNullable)
     "Any" -> AnyType(isNullable = isNullable)
     "Nothing" -> NothingType(isNullable = isNullable)

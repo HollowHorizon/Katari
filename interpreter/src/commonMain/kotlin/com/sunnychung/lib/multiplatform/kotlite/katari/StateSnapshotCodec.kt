@@ -246,7 +246,7 @@ class StateSnapshotCodec(
     private fun serializeResultTarget(target: ResultTarget?): ResultTargetSnapshot? {
         return when (target) {
             null -> null
-            is ResultTarget.Variable -> ResultTargetSnapshot.Variable(target.name)
+            is ResultTarget.Variable -> ResultTargetSnapshot.Variable(target.name, target.declaresLocal)
             is ResultTarget.Slot -> ResultTargetSnapshot.Slot(target.slot)
         }
     }
@@ -254,7 +254,7 @@ class StateSnapshotCodec(
     private fun restoreResultTarget(target: ResultTargetSnapshot?): ResultTarget? {
         return when (target) {
             null -> null
-            is ResultTargetSnapshot.Variable -> ResultTarget.Variable(target.name)
+            is ResultTargetSnapshot.Variable -> ResultTarget.Variable(target.name, target.declaresLocal)
             is ResultTargetSnapshot.Slot -> ResultTarget.Slot(target.slot)
         }
     }

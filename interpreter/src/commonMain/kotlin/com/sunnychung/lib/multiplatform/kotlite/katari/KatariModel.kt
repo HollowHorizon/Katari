@@ -29,6 +29,7 @@ data class CallFunctionInstruction(
 data class SetVariableInstruction(
     val name: String,
     val expression: KatariExpression,
+    val declaresLocal: Boolean = false,
     override val position: SourcePosition? = null,
 ) : KatariInstruction
 
@@ -114,7 +115,10 @@ data class BinaryExpression(
 ) : KatariExpression
 
 sealed interface ResultTarget {
-    data class Variable(val name: String) : ResultTarget
+    data class Variable(
+        val name: String,
+        val declaresLocal: Boolean = false,
+    ) : ResultTarget
     data class Slot(val slot: Int) : ResultTarget
 }
 
@@ -254,7 +258,10 @@ sealed interface TaskStatusSnapshot {
 @Serializable
 sealed interface ResultTargetSnapshot {
     @Serializable
-    data class Variable(val name: String) : ResultTargetSnapshot
+    data class Variable(
+        val name: String,
+        val declaresLocal: Boolean = false,
+    ) : ResultTargetSnapshot
 
     @Serializable
     data class Slot(val slot: Int) : ResultTargetSnapshot
@@ -293,6 +300,12 @@ sealed interface FunctionResult {
 
 interface KatariFunctionDefinition {
     val id: String
+    val signature: KatariCallableSignature?
+        get() = null
+
+    fun matchScore(arguments: List<KatariValue>): Int? {
+        return signature?.matchScore(arguments) ?: 0
+    }
 
     suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult
 
@@ -310,15 +323,67 @@ interface KatariFunctionDefinition {
 }
 
 data class KatariFunctionRegistry(
-    private val functionsById: Map<String, KatariFunctionDefinition>,
+    private val functionsById: Map<String, List<KatariFunctionDefinition>>,
 ) {
     constructor(functions: List<KatariFunctionDefinition>) : this(
-        functions.associateBy { it.id },
+        functions.groupBy { it.id },
     )
 
-    fun definition(id: String): KatariFunctionDefinition {
-        return functionsById[id]
-            ?: throw IllegalArgumentException("No katari function is registered for id `$id`")
+    fun definition(id: String, arguments: List<KatariValue> = emptyList()): KatariFunctionDefinition {
+        val candidates = functionsById[id]
+            ?: throw IllegalArgumentException("No narrative function is registered for id `$id`")
+        val matched = candidates.mapNotNull { definition ->
+            definition.matchScore(arguments)?.let { score -> definition to score }
+        }
+        val bestScore = matched.maxOfOrNull { it.second }
+            ?: throw IllegalArgumentException("No katari function overload `$id` matches arguments: $arguments")
+        val best = matched.filter { it.second == bestScore }.map { it.first }
+        require(best.size == 1) {
+            "Katari function call `$id` is ambiguous for arguments: $arguments"
+        }
+        return best.single()
+    }
+}
+
+data class KatariCallableSignature(
+    val dispatchReceiverTypeId: String? = null,
+    val valueParameterTypeIds: List<String>? = emptyList(),
+) {
+    fun matchScore(arguments: List<KatariValue>): Int? {
+        val valueTypes = valueParameterTypeIds ?: return 0
+        val receiverOffset = if (dispatchReceiverTypeId != null) 1 else 0
+        if (arguments.size != valueTypes.size + receiverOffset) {
+            return null
+        }
+        var score = 1
+        if (dispatchReceiverTypeId != null) {
+            score += arguments.first().matchType(dispatchReceiverTypeId) ?: return null
+        }
+        valueTypes.forEachIndexed { index, typeId ->
+            score += arguments[index + receiverOffset].matchType(typeId) ?: return null
+        }
+        return score
+    }
+}
+
+private fun KatariValue.matchType(typeId: String): Int? {
+    val isNullable = typeId.endsWith("?")
+    val normalized = typeId.removeSuffix("?")
+    if (this == KatariValue.Null) {
+        return if (isNullable) 1 else null
+    }
+    return when (normalized) {
+        "Any" -> 1
+        "String" -> if (this is KatariValue.Text) 4 else null
+        "Boolean" -> if (this is KatariValue.Bool) 4 else null
+        "Int" -> if (this is KatariValue.Int32) 4 else null
+        "Double" -> when (this) {
+            is KatariValue.Float64 -> 4
+            is KatariValue.Int32 -> 2
+            else -> null
+        }
+        "Function" -> if (this is KatariValue.Lambda) 4 else null
+        else -> if (this is KatariValue.HostObject && this.typeId == normalized) 4 else null
     }
 }
 

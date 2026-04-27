@@ -8,6 +8,7 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.FunctionResponse
 import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariInstance
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariProgram
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariTypes
 import com.sunnychung.lib.multiplatform.kotlite.katari.ResultTarget
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariState
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskState
@@ -18,6 +19,7 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
 import com.sunnychung.lib.multiplatform.kotlite.katari.ChoiceOptionSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.SuspendableKatariFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.katari.asParameterType
 import com.sunnychung.lib.multiplatform.kotlite.katari.toKatari
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
@@ -270,6 +272,159 @@ class NarrativeBindingsTest {
         val task = instance.currentState().tasks.single()
         assertEquals(TaskStatus.Completed, task.status)
         assertEquals(KatariValue.Bool(true), task.localVariables.getValue("ok"))
+    }
+
+    @Test
+    fun typedDslResolvesImmediateFunctionOverloadsByValueArgumentType() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            immediateFunction(
+                name = "describe",
+                valueParameters = listOf(KatariTypes.Int),
+                execute = { _, arguments, _ ->
+                    events += "int:${(arguments.single() as KatariValue.Int32).value}"
+                    KatariValue.Null
+                },
+            )
+            immediateFunction(
+                name = "describe",
+                valueParameters = listOf(KatariTypes.Text),
+                execute = { _, arguments, _ ->
+                    events += "text:${(arguments.single() as KatariValue.Text).value}"
+                    KatariValue.Null
+                },
+            )
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    describe(7)
+                    describe("seven")
+                """.trimIndent(),
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            propertyRegistry = bindings.propertyRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("int:7", "text:seven"), events)
+    }
+
+    @Test
+    fun typedDslResolvesMemberFunctionByDispatchReceiverType() = runTest {
+        val events = mutableListOf<String>()
+        val actorType = BindingActor::class.toKatari("binding_actor")
+        val npcType = BindingTestNpcRef::class.toKatari("binding_npc")
+        val bindings = NarrativeBindings {
+            registerHostType(actorType)
+            registerHostType(npcType)
+            immediateMemberFunction(actorType, "label") { receiver, _, _ ->
+                events += "actor:${receiver.ready}"
+                KatariValue.Null
+            }
+            immediateMemberFunction(npcType, "label") { receiver, _, _ ->
+                events += "npc:${receiver.id}"
+                KatariValue.Null
+            }
+            global("actor", BindingActor(ready = true))
+            global("npc", BindingTestNpcRef("npc-1"))
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    actor.label()
+                    npc.label()
+                """.trimIndent(),
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            propertyRegistry = bindings.propertyRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("actor:true", "npc:npc-1"), events)
+    }
+
+    @Test
+    fun typedDslSupportsComputedGlobalAndExtensionProperties() = runTest {
+        var chapter = 1
+        val actor = BindingActor()
+        val actorType = BindingActor::class.toKatari("binding_actor")
+        val bindings = NarrativeBindings {
+            registerHostType(actorType)
+            global("actor", actor)
+            globalProperty(
+                name = "chapter",
+                getter = { KatariValue.Int32(chapter) },
+                setter = { value -> chapter = (value as KatariValue.Int32).value },
+            )
+            extensionProperty(
+                name = "ready",
+                receiver = actorType.asParameterType(),
+                valueType = KatariTypes.Boolean,
+                getter = { receiver, _ ->
+                    KatariValue.Bool(((receiver as KatariValue.HostObject).value as BindingActor).ready)
+                },
+                setter = { receiver, value, _ ->
+                    ((receiver as KatariValue.HostObject).value as BindingActor).ready = (value as KatariValue.Bool).value
+                },
+            )
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    chapter = chapter + 1
+                    actor.ready = true
+                    val observedChapter = chapter
+                    val observedReady = actor.ready
+                """.trimIndent(),
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            propertyRegistry = bindings.propertyRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val locals = instance.currentState().tasks.single().localVariables
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(2, chapter)
+        assertEquals(true, actor.ready)
+        assertEquals(KatariValue.Int32(2), locals.getValue("observedChapter"))
+        assertEquals(KatariValue.Bool(true), locals.getValue("observedReady"))
+        assertEquals(emptyMap(), bindings.globals - "actor")
     }
 
     @Test

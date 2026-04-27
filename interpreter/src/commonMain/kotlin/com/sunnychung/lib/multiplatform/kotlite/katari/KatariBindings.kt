@@ -49,6 +49,7 @@ private fun KClass<*>.defaultTypeId(): String {
 
 data class KatariBindings(
     val functionRegistry: KatariFunctionRegistry,
+    val propertyRegistry: KatariPropertyRegistry,
     val snapshotCodec: StateSnapshotCodec,
     val globals: Map<String, KatariValue>,
     val executionEnvironment: ExecutionEnvironment,
@@ -60,6 +61,7 @@ class NarrativeBindingsBuilder {
     private val functionDefinitions = mutableListOf<KatariFunctionDefinition>()
     private val valueCodecs = mutableListOf<ValueCodec<out ValueSnapshot>>()
     private val globals = linkedMapOf<String, KatariValue>()
+    private val globalProperties = linkedMapOf<String, KatariGlobalPropertyDefinition>()
     private val hostTypes = mutableListOf<KatariType<out Any>>()
 
     fun register(function: KatariFunctionDefinition): NarrativeBindingsBuilder = apply {
@@ -162,6 +164,86 @@ class NarrativeBindingsBuilder {
         functionDefinitions += functions
     }
 
+    fun immediateFunction(
+        name: String,
+        valueParameters: List<KatariParameterType> = emptyList(),
+        dispatchReceiver: KatariParameterType? = null,
+        execute: suspend (
+            receiver: KatariValue?,
+            arguments: List<KatariValue>,
+            context: KatariFunctionContext,
+        ) -> KatariValue = { _, _, _ -> KatariValue.Null },
+    ): NarrativeBindingsBuilder = apply {
+        register(
+            ImmediateKatariFunctionDefinition(
+                id = name,
+                signature = KatariCallableSignature(
+                    dispatchReceiverTypeId = dispatchReceiver?.typeId,
+                    valueParameterTypeIds = valueParameters.map { it.typeId },
+                ),
+                execute = { arguments, context ->
+                    val receiverOffset = if (dispatchReceiver != null) 1 else 0
+                    execute(arguments.getOrNull(0).takeIf { dispatchReceiver != null }, arguments.drop(receiverOffset), context)
+                },
+            )
+        )
+    }
+
+    fun <T : Any> immediateMemberFunction(
+        type: KatariType<T>,
+        name: String,
+        valueParameters: List<KatariParameterType> = emptyList(),
+        execute: suspend (
+            receiver: T,
+            arguments: List<KatariValue>,
+            context: KatariFunctionContext,
+        ) -> KatariValue = { _, _, _ -> KatariValue.Null },
+    ): NarrativeBindingsBuilder = immediateFunction(
+        name = name,
+        valueParameters = valueParameters,
+        dispatchReceiver = type.asParameterType(),
+        execute = { receiver, arguments, context ->
+            val hostReceiver = listOf(requireNotNull(receiver)).extractHostReceiver(type, name)
+            execute(hostReceiver, arguments, context)
+        },
+    )
+
+    fun globalProperty(
+        name: String,
+        getter: (() -> KatariValue)? = null,
+        setter: ((KatariValue) -> Unit)? = null,
+    ): NarrativeBindingsBuilder = apply {
+        globalProperties[name] = KatariGlobalPropertyDefinition(name = name, getter = getter, setter = setter)
+    }
+
+    fun extensionProperty(
+        name: String,
+        receiver: KatariParameterType,
+        valueType: KatariParameterType,
+        getter: ((receiver: KatariValue, context: KatariFunctionContext) -> KatariValue)? = null,
+        setter: ((receiver: KatariValue, value: KatariValue, context: KatariFunctionContext) -> Unit)? = null,
+    ): NarrativeBindingsBuilder = apply {
+        require(getter != null || setter != null) { "Extension property `$name` must declare getter or setter" }
+        if (getter != null) {
+            immediateFunction(
+                name = name,
+                dispatchReceiver = receiver,
+                execute = { receiverValue, _, context -> getter(requireNotNull(receiverValue), context) },
+            )
+        }
+        if (setter != null) {
+            immediateFunction(
+                name = name,
+                dispatchReceiver = receiver,
+                valueParameters = listOf(valueType),
+                execute = { receiverValue, arguments, context ->
+                    setter(requireNotNull(receiverValue), arguments.single(), context)
+                    KatariValue.Null
+                },
+            )
+        }
+    }
+
     fun <T : Any> registerHostType(type: KatariType<T>): NarrativeBindingsBuilder = apply {
         hostTypes += type
     }
@@ -206,6 +288,7 @@ class NarrativeBindingsBuilder {
         val normalizedGlobals = environmentGlobals + globals
         return KatariBindings(
             functionRegistry = KatariFunctionRegistry(environmentDefinitions + functionDefinitions),
+            propertyRegistry = KatariPropertyRegistry(globalProperties.values.toList()),
             snapshotCodec = StateSnapshotCodec(
                 valueCodecs = codecRegistry,
                 executionEnvironment = executionEnvironment,
@@ -258,6 +341,7 @@ private fun <T : Any> List<KatariValue>.extractHostReceiver(
 
 class ImmediateKatariFunctionDefinition(
     override val id: String,
+    override val signature: KatariCallableSignature? = null,
     private val execute: suspend (arguments: List<KatariValue>, context: KatariFunctionContext) -> KatariValue = { _, _ ->
         KatariValue.Null
     },
@@ -289,6 +373,7 @@ class ImmediateKatariFunctionDefinition(
 
 class SuspendableKatariFunctionDefinition(
     override val id: String,
+    override val signature: KatariCallableSignature? = null,
     private val onStart: suspend (arguments: List<KatariValue>, context: KatariFunctionContext) -> Unit = { _, _ -> },
     private val onDispatch: (
         arguments: List<KatariValue>,

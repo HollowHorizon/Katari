@@ -117,7 +117,7 @@ class ExecutionEnvironment(
                     it.copyCompanionClassDefinition(),
                 )
             } +
-                listOf("Int", "Double", "Long", "Boolean", "String", "Char", "Byte", "Unit", "Nothing", "Function", "Class").flatMap { className ->
+                listOf("Int", "Short", "Float", "Double", "Long", "Boolean", "String", "Char", "Byte", "Unit", "Nothing", "Function", "Class").flatMap { className ->
                     if (!classRegistrationFilter(className)) return@flatMap emptyList()
                     fun createTypeParameters(typeName: String): List<TypeParameterNode> {
                         return when (typeName) {
@@ -134,7 +134,7 @@ class ExecutionEnvironment(
                     }
 
                     val interfaces = when (className) {
-                        in setOf("Int", "Double", "Long", "Boolean", "String", "Char") -> {
+                        in setOf("Int", "Short", "Float", "Double", "Long", "Boolean", "String", "Char") -> {
                             listOf(
                                 TypeNode(
                                     position = SourcePosition.BUILTIN,

@@ -125,6 +125,8 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
         TypeNode(SourcePosition.NONE, "Int", null, false),
         TypeNode(SourcePosition.NONE, "Long", null, false),
         TypeNode(SourcePosition.NONE, "Double", null, false),
+        TypeNode(SourcePosition.NONE, "Float", null, false),
+        TypeNode(SourcePosition.NONE, "Short", null, false),
         TypeNode(SourcePosition.NONE, "Boolean", null, false),
         TypeNode(SourcePosition.NONE, "String", null, false),
         TypeNode(SourcePosition.NONE, "Char", null, false),
@@ -1367,11 +1369,7 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
                 is TypeNode -> ArgumentInfo(it.toDataType(), false, null)
                 is FunctionValueParameterNode -> ArgumentInfo(
                     type = if (typeArgumentByName.isEmpty()) {
-                        it.type.resolveGenericParameterTypeToUpperBound(
-                            functionArgumentAndReturnTypeDeclarations.typeParameters +
-                                extraTypeResolutions.map { TypeParameterNode(it.value.position, it.key, it.value) }
-                        ) // note the order
-                            .toDataType()
+                        it.type.toDataType()
                     } else {
                         it.type.resolveGenericParameterTypeArguments(extraTypeResolutions + typeArgumentByName).toDataType() // note the order
                     },
@@ -1428,9 +1426,12 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
                     if (t == null) {
                         return
                     }
+                    if (t !is ObjectType) {
+                        return
+                    }
                     (tpUpperBounds[resolvedArgumentTypeName] as? ObjectType)?.arguments?.forEachIndexed { i, it ->
                         if (tpUpperBounds.containsKey(it.name)) {
-                            val argument = (t as ObjectType).arguments[i]
+                            val argument = t.arguments[i]
                             if (argument is RepeatedType && argument.actualType == null) {
                                 return@forEachIndexed
                             }

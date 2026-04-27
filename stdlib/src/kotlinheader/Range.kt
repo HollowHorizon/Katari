@@ -12,6 +12,28 @@ fun <T : Comparable<T>> OpenEndRange<T>.isEmpty(): Boolean
 
 operator fun <T : Comparable<T>> T.rangeTo(that: T): ClosedRange<T>
 operator fun <T : Comparable<T>> T.rangeUntil(that: T): OpenEndRange<T>
+fun <T : Comparable<T>> T.coerceAtLeast(minimumValue: T): T
+fun <T : Comparable<T>> T.coerceAtMost(maximumValue: T): T
+fun <T : Comparable<T>> T.coerceIn(minimumValue: T?, maximumValue: T?): T
+fun <T : Comparable<T>> T.coerceIn(range: ClosedRange<T>): T
+fun Byte.coerceIn(minimumValue: Byte, maximumValue: Byte): Byte
+fun Short.coerceIn(minimumValue: Short, maximumValue: Short): Short
+fun Int.coerceIn(minimumValue: Int, maximumValue: Int): Int
+fun Long.coerceIn(minimumValue: Long, maximumValue: Long): Long
+fun Float.coerceIn(minimumValue: Float, maximumValue: Float): Float
+fun Double.coerceIn(minimumValue: Double, maximumValue: Double): Double
+fun Byte.coerceAtLeast(minimumValue: Byte): Byte
+fun Short.coerceAtLeast(minimumValue: Short): Short
+fun Int.coerceAtLeast(minimumValue: Int): Int
+fun Long.coerceAtLeast(minimumValue: Long): Long
+fun Float.coerceAtLeast(minimumValue: Float): Float
+fun Double.coerceAtLeast(minimumValue: Double): Double
+fun Byte.coerceAtMost(maximumValue: Byte): Byte
+fun Short.coerceAtMost(maximumValue: Short): Short
+fun Int.coerceAtMost(maximumValue: Int): Int
+fun Long.coerceAtMost(maximumValue: Long): Long
+fun Float.coerceAtMost(maximumValue: Float): Float
+fun Double.coerceAtMost(maximumValue: Double): Double
 
 //operator fun ClosedRange<Int>.contains(value: Byte): Boolean
 //operator fun ClosedRange<Long>.contains(value: Byte): Boolean

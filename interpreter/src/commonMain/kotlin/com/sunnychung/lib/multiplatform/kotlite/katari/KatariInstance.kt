@@ -19,6 +19,7 @@ class KatariInstance(
         tasks = listOf(TaskState(id = program.entryTaskId)),
     ),
     private val functionRegistry: KatariFunctionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
+    private val propertyRegistry: KatariPropertyRegistry = KatariPropertyRegistry(),
     private val snapshotCodec: StateSnapshotCodec = StateSnapshotCodec(),
     coroutineScope: CoroutineScope? = null,
 ) {
@@ -229,7 +230,7 @@ class KatariInstance(
     ): FunctionDispatchRequest? {
         val arguments = evaluateArguments(task, instruction)
         val referencedSlots = collectReferencedSlots(instruction.arguments)
-        val definition = functionRegistry.definition(instruction.functionId)
+        val definition = functionRegistry.definition(instruction.functionId, arguments)
         return when (val result = definition.startCall(arguments, DefaultKatariFunctionContext(currentState, task))) {
             is FunctionResult.Returned -> {
                 currentState = currentState.updateTask(
@@ -272,7 +273,7 @@ class KatariInstance(
             DispatchData(
                 taskId = task.id,
                 arguments = arguments,
-                definition = functionRegistry.definition(instruction.functionId),
+                definition = functionRegistry.definition(instruction.functionId, arguments),
                 context = DefaultKatariFunctionContext(currentState, task),
             )
         }
@@ -317,7 +318,7 @@ class KatariInstance(
             val instruction = resolveSuspendedCallInstruction(task)
             val arguments = evaluateArguments(task, instruction)
             val referencedSlots = collectReferencedSlots(instruction.arguments)
-            val definition = functionRegistry.definition(instruction.functionId)
+            val definition = functionRegistry.definition(instruction.functionId, arguments)
             try {
                 when (val result = definition.resumeCall(
                     arguments = arguments,
@@ -383,6 +384,17 @@ class KatariInstance(
         instruction: SetVariableInstruction,
     ): TaskState {
         val value = evaluateExpression(currentState, task, instruction.expression)
+        if (!instruction.declaresLocal && findFrameVariable(task, currentCallFrame(task).id, instruction.name) == null) {
+            val nextTask = propertyRegistry.setGlobal(instruction.name, value)?.let {
+                task.copy(
+                    instructionPointer = task.instructionPointer + 1,
+                    slots = if (instruction.expression is SlotExpression) task.slots - instruction.expression.slot else task.slots,
+                )
+            }
+            if (nextTask != null) {
+                return syncTopLocals(nextTask)
+            }
+        }
         val frame = currentCallFrame(task)
         val updated = frame.copy(localVariables = frame.localVariables + (instruction.name to value))
         return syncTopLocals(
@@ -403,6 +415,13 @@ class KatariInstance(
         return when (resultTarget) {
             null -> task.copy(instructionPointer = nextInstructionPointer)
             is ResultTarget.Variable -> {
+                if (
+                    !resultTarget.declaresLocal &&
+                    findFrameVariable(task, currentCallFrame(task).id, resultTarget.name) == null &&
+                    propertyRegistry.setGlobal(resultTarget.name, value) != null
+                ) {
+                    return task.copy(instructionPointer = nextInstructionPointer)
+                }
                 val frame = currentCallFrame(task)
                 val updated = frame.copy(localVariables = frame.localVariables + (resultTarget.name to value))
                 syncTopLocals(task.copy(instructionPointer = nextInstructionPointer, callFrames = task.callFrames.replaceLast(updated)))
@@ -610,7 +629,9 @@ class KatariInstance(
         if (frameValue != null) {
             return frameValue.second
         }
-        return state.globals[name] ?: throw IllegalArgumentException("Variable `$name` is not defined")
+        return state.globals[name]
+            ?: propertyRegistry.getGlobal(name)
+            ?: throw IllegalArgumentException("Variable `$name` is not defined")
     }
 
     private fun resolveVariableReference(
@@ -623,6 +644,9 @@ class KatariInstance(
             return SlotValue.VariableReference(name = name, frameId = frameValue.first.id)
         }
         if (name in state.globals) {
+            return SlotValue.VariableReference(name = name, frameId = null)
+        }
+        if (propertyRegistry.hasGlobal(name)) {
             return SlotValue.VariableReference(name = name, frameId = null)
         }
         throw IllegalArgumentException("Variable `$name` is not defined")
@@ -641,6 +665,7 @@ class KatariInstance(
     ): KatariValue {
         return if (reference.frameId == null) {
             state.globals[reference.name]
+                ?: propertyRegistry.getGlobal(reference.name)
                 ?: throw IllegalArgumentException("Global variable `${reference.name}` is not defined")
         } else {
             findFrameById(task, reference.frameId)

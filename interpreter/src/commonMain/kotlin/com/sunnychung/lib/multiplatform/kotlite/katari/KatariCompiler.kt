@@ -270,7 +270,7 @@ class KatariCompiler(
         instructions += CallFunctionInstruction(
             functionId = "chooseIndexed",
             arguments = compiledEntries.map { it.argumentExpression },
-            resultTarget = ResultTarget.Variable(choiceVariable),
+            resultTarget = ResultTarget.Variable(choiceVariable, declaresLocal = true),
             position = node.position,
         )
 
@@ -359,6 +359,7 @@ class KatariCompiler(
                 instructions += SetVariableInstruction(
                     name = targetName,
                     expression = LambdaLiteralExpression(lambdaId = lambdaId, position = initialValue.position),
+                    declaresLocal = true,
                     position = node.position,
                 )
                 return
@@ -373,14 +374,14 @@ class KatariCompiler(
                     callPosition = initialValue.position,
                     argumentExpressions = invocation.argumentExpressions,
                     instructions = instructions,
-                    resultTarget = ResultTarget.Variable(targetName),
+                    resultTarget = ResultTarget.Variable(targetName, declaresLocal = true),
                     receiverExpression = invocation.receiverExpression,
                 )
             } else {
                 instructions += compileCall(
                     node = initialValue,
                     instructions = instructions,
-                    resultTarget = ResultTarget.Variable(targetName),
+                    resultTarget = ResultTarget.Variable(targetName, declaresLocal = true),
                 )
             }
             return
@@ -388,6 +389,7 @@ class KatariCompiler(
         instructions += SetVariableInstruction(
             name = targetName,
             expression = compileExpression(initialValue, instructions),
+            declaresLocal = true,
             position = node.position,
         )
     }
@@ -448,6 +450,16 @@ class KatariCompiler(
                                 position = node.position,
                             )
                         }
+                    }
+                    is NavigationNode -> {
+                        instructions += CallFunctionInstruction(
+                            functionId = target.member.name,
+                            arguments = listOf(
+                                compileExpression(target.subject, instructions),
+                                compileExpression(node.value, instructions),
+                            ),
+                            position = node.position,
+                        )
                     }
                     else -> throw UnsupportedOperationException(
                         "Katari assignment target `${target::class.simpleName}` is not supported"
@@ -579,7 +591,7 @@ class KatariCompiler(
         instructions += CallFunctionInstruction(
             functionId = "iterator",
             arguments = listOf(compileExpression(node.subject, instructions)),
-            resultTarget = ResultTarget.Variable(iteratorName),
+            resultTarget = ResultTarget.Variable(iteratorName, declaresLocal = true),
             position = node.position,
         )
 
@@ -602,7 +614,7 @@ class KatariCompiler(
         instructions += CallFunctionInstruction(
             functionId = "next",
             arguments = listOf(VariableExpression(iteratorName, position = node.position)),
-            resultTarget = ResultTarget.Variable(valueName),
+            resultTarget = ResultTarget.Variable(valueName, declaresLocal = true),
             position = node.position,
         )
         loopVariableNames.forEach { variableName ->
@@ -824,9 +836,9 @@ class KatariCompiler(
             when (last) {
                 is ReturnNode -> {
                     val returnValue = last.value ?: NullNode
-                    compileExpressionIntoTarget(returnValue, ResultTarget.Variable(returnName), instructions)
+                    compileExpressionIntoTarget(returnValue, ResultTarget.Variable(returnName, declaresLocal = true), instructions)
                 }
-                else -> compileExpressionIntoTarget(last, ResultTarget.Variable(returnName), instructions)
+                else -> compileExpressionIntoTarget(last, ResultTarget.Variable(returnName, declaresLocal = true), instructions)
             }
             instructions += ExitCallFrameInstruction(
                 returnExpression = VariableExpression(returnName, position = last.position),

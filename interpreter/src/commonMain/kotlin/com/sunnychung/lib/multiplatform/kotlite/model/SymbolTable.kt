@@ -63,6 +63,10 @@ open class SymbolTable(
         private set
     lateinit var ByteType: PrimitiveType
         private set
+    lateinit var ShortType: PrimitiveType
+        private set
+    lateinit var FloatType: PrimitiveType
+        private set
     lateinit var NullableIntType: PrimitiveType
         private set
     lateinit var NullableLongType: PrimitiveType
@@ -76,6 +80,10 @@ open class SymbolTable(
     lateinit var NullableCharType: PrimitiveType
         private set
     lateinit var NullableByteType: PrimitiveType
+        private set
+    lateinit var NullableShortType: PrimitiveType
+        private set
+    lateinit var NullableFloatType: PrimitiveType
         private set
 
     protected fun initPrimitiveTypes() {
@@ -108,6 +116,9 @@ open class SymbolTable(
             StringType = getPrimitiveType(PrimitiveTypeName.String, isNullable = false)
             CharType = getPrimitiveType(PrimitiveTypeName.Char, isNullable = false)
             ByteType = getPrimitiveType(PrimitiveTypeName.Byte, isNullable = false)
+            ShortType = getPrimitiveType(PrimitiveTypeName.Short, isNullable = false)
+            FloatType = getPrimitiveType(PrimitiveTypeName.Float, isNullable = false)
+
             NullableIntType = getPrimitiveType(PrimitiveTypeName.Int, isNullable = true)
             NullableLongType = getPrimitiveType(PrimitiveTypeName.Long, isNullable = true)
             NullableDoubleType = getPrimitiveType(PrimitiveTypeName.Double, isNullable = true)
@@ -115,6 +126,8 @@ open class SymbolTable(
             NullableStringType = getPrimitiveType(PrimitiveTypeName.String, isNullable = true)
             NullableCharType = getPrimitiveType(PrimitiveTypeName.Char, isNullable = true)
             NullableByteType = getPrimitiveType(PrimitiveTypeName.Byte, isNullable = true)
+            NullableShortType = getPrimitiveType(PrimitiveTypeName.Short, isNullable = true)
+            NullableFloatType = getPrimitiveType(PrimitiveTypeName.Float, isNullable = true)
         } else {
             IntType = rootScope.IntType
             LongType = rootScope.LongType
@@ -123,6 +136,8 @@ open class SymbolTable(
             StringType = rootScope.StringType
             CharType = rootScope.CharType
             ByteType = rootScope.ByteType
+            ShortType = rootScope.ShortType
+            FloatType = rootScope.FloatType
             NullableIntType = rootScope.NullableIntType
             NullableLongType = rootScope.NullableLongType
             NullableDoubleType = rootScope.NullableDoubleType
@@ -130,6 +145,8 @@ open class SymbolTable(
             NullableStringType = rootScope.NullableStringType
             NullableCharType = rootScope.NullableCharType
             NullableByteType = rootScope.NullableByteType
+            NullableShortType = rootScope.NullableShortType
+            NullableFloatType = rootScope.NullableFloatType
         }
     }
 
