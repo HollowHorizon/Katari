@@ -2,31 +2,7 @@ package com.sunnychung.lib.multiplatform.kotlite.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.Interpreter
 import com.sunnychung.lib.multiplatform.kotlite.KotliteInterpreter
-import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
-import com.sunnychung.lib.multiplatform.kotlite.model.DataType
-import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
-import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
-import com.sunnychung.lib.multiplatform.kotlite.model.ExtensionProperty
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterModifier
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
-import com.sunnychung.lib.multiplatform.kotlite.model.GlobalProperty
-import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
-import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
-import com.sunnychung.lib.multiplatform.kotlite.model.LibraryModule
-import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
-import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
-import com.sunnychung.lib.multiplatform.kotlite.model.ClassInstance
-import com.sunnychung.lib.multiplatform.kotlite.model.ObjectType
-import com.sunnychung.lib.multiplatform.kotlite.model.ProvidedClassDefinition
-import com.sunnychung.lib.multiplatform.kotlite.model.RepeatedType
-import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
-import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
-import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
-import com.sunnychung.lib.multiplatform.kotlite.model.TypeNode
-import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameterNode
-import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameterType
-import com.sunnychung.lib.multiplatform.kotlite.model.toTypeNode
-import com.sunnychung.lib.multiplatform.kotlite.model.toTypeParameterNodes
+import com.sunnychung.lib.multiplatform.kotlite.model.*
 import kotlinx.serialization.KSerializer
 import kotlin.reflect.KClass
 
@@ -179,11 +155,15 @@ class NarrativeBindingsBuilder {
                 id = name,
                 signature = KatariCallableSignature(
                     dispatchReceiverTypeId = dispatchReceiver?.typeId,
-                    valueParameterTypeIds = valueParameters.map { it.typeId },
+                    valueTypes = valueParameters.map { it.typeId },
                 ),
                 execute = { arguments, context ->
                     val receiverOffset = if (dispatchReceiver != null) 1 else 0
-                    execute(arguments.getOrNull(0).takeIf { dispatchReceiver != null }, arguments.drop(receiverOffset), context)
+                    execute(
+                        arguments.getOrNull(0).takeIf { dispatchReceiver != null },
+                        arguments.drop(receiverOffset),
+                        context
+                    )
                 },
             )
         )
@@ -310,7 +290,7 @@ class NarrativeBindingsBuilder {
                 val hostType = hostTypes.firstOrNull { it.kClass.isInstance(value) }
                     ?: throw IllegalArgumentException(
                         "No Kotlite host type is registered for `${value::class.qualifiedName}`. " +
-                            "Register `${value::class.simpleName}::class.toKotlite()` first."
+                                "Register `${value::class.simpleName}::class.toKotlite()` first."
                     )
                 KatariValue.HostObject(typeId = hostType.typeId, value = value)
             }
@@ -430,15 +410,17 @@ private fun buildExecutionEnvironmentNarrativeBridge(
         .filter { it.isInstanceCreationAllowed }
         .map { it.fullQualifiedName.removeSuffix("?").removeSuffix(".Companion") }
         .distinct()
-    val extensionProperties = executionEnvironment.getExtensionProperties(interpreter.symbolTable()).onEach { property ->
-        if (property.receiverType == null) {
-            property.receiverType = property.receiver.toTypeNode("<NarrativeBridge>")
+    val extensionProperties =
+        executionEnvironment.getExtensionProperties(interpreter.symbolTable()).onEach { property ->
+            if (property.receiverType == null) {
+                property.receiverType = property.receiver.toTypeNode("<NarrativeBridge>")
+            }
+            if (property.typeNode == null) {
+                property.typeNode = property.type.toTypeNode("<NarrativeBridge>")
+            }
         }
-        if (property.typeNode == null) {
-            property.typeNode = property.type.toTypeNode("<NarrativeBridge>")
-        }
-    }
-    val definitionNames = (declarations.map { it.name } + extensionProperties.map { it.declaredName } + constructableClassNames).distinct()
+    val definitionNames =
+        (declarations.map { it.name } + extensionProperties.map { it.declaredName } + constructableClassNames).distinct()
     val definitions = definitionNames.map { name ->
         ExecutionEnvironmentKatariFunctionDefinition(
             id = name,
@@ -540,19 +522,10 @@ private class ExecutionEnvironmentKatariFunctionDefinition(
     private fun splitReceiver(
         overload: FunctionDeclarationNode,
         arguments: List<KatariValue>,
-    ): Pair<RuntimeValue?, List<RuntimeValue>> {
-        val receiver = if (overload.receiver != null) {
-            arguments.first().toRuntimeValue(interpreter)
-        } else {
-            null
-        }
-        val narrativeArguments = if (overload.receiver != null) {
-            arguments.drop(1)
-        } else {
-            arguments
-        }
-        val callArgs = narrativeArguments.map { it.toRuntimeValue(interpreter) }
-        return receiver to callArgs
+    ): Pair<RuntimeValue?, List<RuntimeValue>> = if (overload.receiver != null) {
+        arguments.first().toRuntimeValue(interpreter) to arguments.drop(1).map { it.toRuntimeValue(interpreter) }
+    } else {
+        null to arguments.map { it.toRuntimeValue(interpreter) }
     }
 
     private fun inferTypeArguments(
@@ -663,7 +636,10 @@ private class ExecutionEnvironmentKatariFunctionDefinition(
         }
 
         val property = properties.firstOrNull { candidate ->
-            candidate.receiverType?.matchesRuntimeType(receiver.type(), candidate.typeParameters.toTypeParameterNodes()) == true
+            candidate.receiverType?.matchesRuntimeType(
+                receiver.type(),
+                candidate.typeParameters.toTypeParameterNodes()
+            ) == true
         } ?: return null
         val getter = property.getter ?: return null
         return getter(interpreter, receiver, property.typeArgumentsMap(receiver.type()))
@@ -727,6 +703,7 @@ private fun TypeNode.matchesRuntimeType(
             val runtimeNode = runtimeType.toTypeNode()
             name == runtimeNode.name || (name == "Double" && runtimeNode.name == "Int")
         }
+
         "Function" -> runtimeType.name == "Function"
         else -> {
             val objectType = runtimeType.asObjectType() ?: return false
@@ -766,11 +743,12 @@ private fun KatariValue.toRuntimeValue(interpreter: Interpreter): RuntimeValue {
         is KatariValue.Lambda -> throw IllegalArgumentException(
             "ExecutionEnvironment bridge cannot convert Narrative lambda `$id` to RuntimeValue."
         )
+
         is KatariValue.HostObject -> {
             value as? RuntimeValue
                 ?: throw IllegalArgumentException(
                     "ExecutionEnvironment bridge cannot convert HostObject(typeId=$typeId) to RuntimeValue automatically. " +
-                        "Use RuntimeValue-backed objects or narrative-native functions for this call."
+                            "Use RuntimeValue-backed objects or narrative-native functions for this call."
                 )
         }
     }
@@ -790,6 +768,7 @@ private fun RuntimeValue.toNarrativeValue(): KatariValue {
                 KatariValue.HostObject(typeId = type().name, value = this)
             }
         }
+
         else -> KatariValue.HostObject(typeId = type().name, value = this)
     }
 }

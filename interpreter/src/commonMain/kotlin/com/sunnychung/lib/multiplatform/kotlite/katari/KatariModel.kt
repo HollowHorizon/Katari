@@ -347,10 +347,9 @@ data class KatariFunctionRegistry(
 
 data class KatariCallableSignature(
     val dispatchReceiverTypeId: String? = null,
-    val valueParameterTypeIds: List<String>? = emptyList(),
+    val valueTypes: List<String> = emptyList(),
 ) {
     fun matchScore(arguments: List<KatariValue>): Int? {
-        val valueTypes = valueParameterTypeIds ?: return 0
         val receiverOffset = if (dispatchReceiverTypeId != null) 1 else 0
         if (arguments.size != valueTypes.size + receiverOffset) {
             return null
