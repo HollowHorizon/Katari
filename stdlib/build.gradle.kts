@@ -191,14 +191,24 @@ kotliteStdLibHeaderProcessor {
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.MapEntryClass",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.SetClass",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.collections.MutableSetClass",
+                "kotlin.collections.random",
             ),
             typeAliases = mapOf(
-                "MapEntry<K, V>" to "Map.Entry<K, V>"
+                "MapEntry<K, V>" to "Map.Entry<K, V>",
             ),
         ),
         "Core" to KotliteModuleConfig(),
         "Math" to KotliteModuleConfig(
             imports = listOf("kotlin.math.*")
+        ),
+        "Random" to KotliteModuleConfig(
+            imports = listOf(
+                "com.sunnychung.lib.multiplatform.kotlite.stdlib.random.KRandomClass",
+                "com.sunnychung.lib.multiplatform.kotlite.stdlib.random.KRandomValue",
+            ),
+            typeAliases = mapOf(
+                "KRandom" to "kotlin.random.Random",
+            ),
         ),
         "Byte" to KotliteModuleConfig(
             imports = listOf(
@@ -209,13 +219,14 @@ kotliteStdLibHeaderProcessor {
         ),
         "Range" to KotliteModuleConfig(
             imports = listOf(
+                "kotlin.ranges.random",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.range.ClosedRangeValue",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.range.OpenEndRangeValue",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.range.IntProgressionValue",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.range.IntRangeValue",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.range.LongProgressionValue",
                 "com.sunnychung.lib.multiplatform.kotlite.stdlib.range.LongRangeValue",
-            )
+            ),
         ),
         "Uuid" to KotliteModuleConfig(
             imports = listOf(

@@ -1,13 +1,6 @@
 package ru.hollowhorizon.narrate
 
-import com.sunnychung.lib.multiplatform.kotlite.katari.ImmediateKatariFunctionDefinition
-import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBindings
-import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
-import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValue
-import com.sunnychung.lib.multiplatform.kotlite.katari.ValueRestoreContext
-import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.katari.toKatari
+import com.sunnychung.lib.multiplatform.kotlite.katari.*
 import com.sunnychung.lib.multiplatform.kotlite.stdlib.AllStdLibModules
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -44,6 +37,14 @@ fun defaultBindings(host: NarrativeHost) = NarrativeBindings {
                     ),
                 )
             },
+            signature = KatariCallableSignature(
+                valueParameters = listOf(
+                    KatariTypes.Text.asValueParameter("name"),
+                    KatariTypes.Int.asValueParameter("age"),
+                    KatariTypes.Int.asValueParameter("weight")
+                ),
+                returnType = KatariTypes.host(narrativeObjectType)
+            ),
         )
     )
 }

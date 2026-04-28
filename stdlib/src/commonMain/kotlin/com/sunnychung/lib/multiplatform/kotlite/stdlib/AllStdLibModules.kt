@@ -15,6 +15,7 @@ class AllStdLibModules(outputToConsoleFunction: (String) -> Unit = { print(it) }
         TextLibModule(),
         RegexLibModule(),
         MathLibModule(),
+        RandomLibModule(),
         ByteLibModule(),
         RangeLibModule(),
         KDateTimeLibModule(),

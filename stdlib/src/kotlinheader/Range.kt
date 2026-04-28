@@ -56,6 +56,7 @@ fun IntProgression.reversed(): IntProgression
 infix fun IntProgression.step(step: Int): IntProgression
 operator fun IntRange.contains(element: Int?): Boolean
 fun IntRange.random(): Int
+fun IntRange.random(random: KRandom): Int
 fun IntRange.randomOrNull(): Int?
 infix fun Int.downTo(to: Byte): IntProgression
 infix fun Int.downTo(to: Int): IntProgression
@@ -74,6 +75,7 @@ fun LongProgression.reversed(): LongProgression
 infix fun LongProgression.step(step: Long): LongProgression
 operator fun LongRange.contains(element: Long?): Boolean
 fun LongRange.random(): Long
+fun LongRange.random(random: KRandom): Long
 fun LongRange.randomOrNull(): Long?
 infix fun Long.downTo(to: Byte): LongProgression
 infix fun Long.downTo(to: Int): LongProgression

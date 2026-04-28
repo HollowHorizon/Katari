@@ -162,6 +162,7 @@ operator fun <T> MutableCollection<T>.plusAssign(element: T)
 operator fun <T> MutableCollection<T>.plusAssign(elements: Iterable<T>)
 fun <T> Iterable<T>.plusElement(element: T): List<T>
 fun <T> List<T>.random(): T
+fun <T> Collection<T>.random(random: KRandom): T
 fun <T> List<T>.randomOrNull(): T?
 fun <T> MutableCollection<T>.remove(element: T): Boolean
 fun <T> MutableCollection<T>.removeAll(elements: Collection<T>): Boolean
