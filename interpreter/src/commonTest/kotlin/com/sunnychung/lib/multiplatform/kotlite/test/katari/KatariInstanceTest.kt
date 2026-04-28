@@ -6,6 +6,7 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.KatariNarrativeProgram
 import com.sunnychung.lib.multiplatform.kotlite.katari.LiteralExpression
 import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionContext
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariCallableSignature
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionDefinition
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionDispatchContext
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionRegistry
@@ -17,6 +18,7 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeNoOpHost
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariProgram
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariState
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariStateSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariTypes
 import com.sunnychung.lib.multiplatform.kotlite.katari.StateSnapshotCodec
 import com.sunnychung.lib.multiplatform.kotlite.katari.StateSnapshotValidationException
 import com.sunnychung.lib.multiplatform.kotlite.katari.ResultTarget
@@ -1385,6 +1387,9 @@ class TestNpcCodec : ValueCodec<TestNpcSnapshot> {
 
 object PromptFlagFunction : KatariFunctionDefinition {
     override val id: String = "promptFlag"
+    override val signature: KatariCallableSignature = KatariCallableSignature(
+        valueTypes = listOf(KatariTypes.Text),
+    )
 
     override suspend fun startCall(
         arguments: List<KatariValue>,

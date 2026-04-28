@@ -1,18 +1,10 @@
 import com.sunnychung.gradle.plugin.kotlite.codegenerator.KotliteModuleConfig
 
-//buildscript {
-//    dependencies {
-//        classpath("$group:kotlite-stdlib-processor-plugin")
-//    }
-//}
-
 plugins {
     kotlin("multiplatform")
     id("sunnychung.publication")
     id("io.github.sunny-chung.kotlite-stdlib-processor-plugin") version "1.0.0"
 }
-
-//apply("kotlite-stdlib-processor-plugin")
 
 version = "1.1.0"
 

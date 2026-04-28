@@ -1,24 +1,26 @@
 package com.sunnychung.lib.multiplatform.kotlite.test.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.katari.CallFunctionInstruction
-import com.sunnychung.lib.multiplatform.kotlite.katari.ImmediateKatariFunctionDefinition
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariNarrativeProgram
-import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBindings
+import com.sunnychung.lib.multiplatform.kotlite.katari.ChoiceOptionSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.FunctionResponse
-import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
+import com.sunnychung.lib.multiplatform.kotlite.katari.ImmediateKatariFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariCallableSignature
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariInstance
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariNarrativeProgram
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariParameterType
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariProgram
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariTypes
-import com.sunnychung.lib.multiplatform.kotlite.katari.ResultTarget
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariState
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariTypes
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValue
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBindings
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
+import com.sunnychung.lib.multiplatform.kotlite.katari.ResultTarget
+import com.sunnychung.lib.multiplatform.kotlite.katari.SuspendableKatariFunctionDefinition
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskState
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatus
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValue
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueRestoreContext
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
-import com.sunnychung.lib.multiplatform.kotlite.katari.ChoiceOptionSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.katari.SuspendableKatariFunctionDefinition
 import com.sunnychung.lib.multiplatform.kotlite.katari.asParameterType
 import com.sunnychung.lib.multiplatform.kotlite.katari.toKatari
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
@@ -80,6 +82,7 @@ class NarrativeBindingsTest {
             register(
                 SuspendableKatariFunctionDefinition(
                     id = "promptFlag",
+                    signature = KatariCallableSignature(),
                     onDispatch = { _, _, resume -> resume(PromptFlagResponse(true)) },
                     onResume = { _, response, _ -> KatariValue.Bool((response as PromptFlagResponse).enabled) },
                 )
@@ -121,6 +124,7 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "append",
+                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Text)),
                     execute = { arguments, _ ->
                         events += (arguments.single() as KatariValue.Text).value
                         KatariValue.Null
@@ -161,6 +165,7 @@ class NarrativeBindingsTest {
                 events += text
                 resume()
             }
+
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -200,6 +205,7 @@ class NarrativeBindingsTest {
                 events += text
                 resume()
             }
+
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -389,7 +395,8 @@ class NarrativeBindingsTest {
                     KatariValue.Bool(((receiver as KatariValue.HostObject).value as BindingActor).ready)
                 },
                 setter = { receiver, value, _ ->
-                    ((receiver as KatariValue.HostObject).value as BindingActor).ready = (value as KatariValue.Bool).value
+                    ((receiver as KatariValue.HostObject).value as BindingActor).ready =
+                        (value as KatariValue.Bool).value
                 },
             )
         }
@@ -435,6 +442,7 @@ class NarrativeBindingsTest {
                 events += text
                 resume()
             }
+
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -486,10 +494,12 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "capture",
+                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Any)),
                     execute = { arguments, _ ->
                         val value = assertIs<KatariValue.HostObject>(arguments.single()).value as RuntimeValue
                         val holder = assertIs<KotlinValueHolder<*>>(value)
-                        val elements = assertIs<List<*>>(holder.value).map { assertIs<RuntimeValue>(it).convertToString() }
+                        val elements =
+                            assertIs<List<*>>(holder.value).map { assertIs<RuntimeValue>(it).convertToString() }
                         events += elements.joinToString(prefix = "[", postfix = "]")
                         KatariValue.Null
                     }
@@ -529,6 +539,7 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "capture",
+                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Any)),
                     execute = { arguments, _ ->
                         events += when (val value = arguments.single()) {
                             KatariValue.Null -> "null"
@@ -580,6 +591,7 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "capture",
+                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Any)),
                     execute = { arguments, _ ->
                         events += when (val value = arguments.single()) {
                             KatariValue.Null -> "null"
@@ -656,7 +668,10 @@ class NarrativeBindingsTest {
 
         assertEquals("List", list.type().name)
         assertEquals("Map", map.type().name)
-        assertEquals("5", ((map as KotlinValueHolder<*>).value as Map<*, *>).values.single().let { (it as RuntimeValue).convertToString() })
+        assertEquals(
+            "5",
+            ((map as KotlinValueHolder<*>).value as Map<*, *>).values.single()
+                .let { (it as RuntimeValue).convertToString() })
     }
 
     @Test
@@ -667,6 +682,7 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "capture",
+                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Any)),
                     execute = { arguments, _ ->
                         events += when (val value = arguments.single()) {
                             KatariValue.Null -> "null"
@@ -720,6 +736,7 @@ class NarrativeBindingsTest {
                 events += text
                 resume()
             }
+
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
         }
@@ -731,11 +748,11 @@ class NarrativeBindingsTest {
                 filename = "<Narrative>",
                 code = """
                     operator fun String.set(index: String, value: Int): String {
-                        "${'$'}this: ${'$'}index (${ '$' }value)"
+                        "${'$'}this: ${'$'}index (${'$'}value)"
                         return this
                     }
                     "Так, ну допустим"["И вот это"] = 1
-                """.trimIndent().replace("${ '$' }", "$"),
+                """.trimIndent().replace("${'$'}", "$"),
             ),
             initialState = KatariState(
                 programVersion = 1,
@@ -753,6 +770,80 @@ class NarrativeBindingsTest {
 
         assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("Так, ну допустим: И вот это (1)"), events)
+    }
+
+    @Test
+    fun inheritanceWithNarrativeTypes() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+
+        open class A(val out: String) {
+            fun methodA() {
+                host.narrate("A::$out") {}
+            }
+        }
+
+        class B(name: String) : A(name) {
+            fun methodB() {
+                host.narrate("B::$out") {}
+            }
+        }
+
+        val typeA = A::class.toKatari("type_a")
+        val typeB = B::class.toKatari("type_b", superTypes = listOf(typeA))
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+            registerHostType(typeA)
+            registerHostType(typeB)
+            immediateFunction("A", listOf(KatariParameterType("String"))) { _, args, _ ->
+                KatariValue.HostObject("type_a", A((args[0] as KatariValue.Text).value))
+            }
+            immediateFunction("B", listOf(KatariParameterType("String"))) { _, args, _ ->
+                KatariValue.HostObject("type_b", B((args[0] as KatariValue.Text).value))
+            }
+
+            immediateFunction("methodB", dispatchReceiver = KatariParameterType("type_b")) { receiver, _, _ ->
+                ((receiver as KatariValue.HostObject).value as B).methodB()
+                KatariValue.Null
+            }
+            immediateFunction("methodA", dispatchReceiver = KatariParameterType("type_a")) { receiver, _, _ ->
+                ((receiver as KatariValue.HostObject).value as A).methodA()
+                KatariValue.Null
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val b = B("Test")
+                    b.methodB()
+                    b.methodA()
+                """.trimIndent(),
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("B::Test", "A::Test"), events)
     }
 }
 

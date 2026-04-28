@@ -11,7 +11,7 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver-convention") version "0.5.0"
 }
 
-rootProject.name = "kotlite"
+rootProject.name = "katari"
 include(":kotlite-interpreter")
 include(":kotlite-stdlib")
 include(":kotlite-stdlib-processor-plugin")

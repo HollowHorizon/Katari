@@ -33,6 +33,9 @@ object NarrativeBuiltinFunctions {
 
     private class NarrateFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "narrate"
+        override val signature: KatariCallableSignature = KatariCallableSignature(
+            valueTypes = listOf(KatariTypes.Any),
+        )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.size == 1) { "`narrate` expects a single text argument" }
@@ -64,6 +67,9 @@ object NarrativeBuiltinFunctions {
 
     private class ChooseFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "choose"
+        override val signature: KatariCallableSignature = KatariCallableSignature(
+            valueTypes = listOf(KatariTypes.Any.nullable().repeated()),
+        )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.isNotEmpty()) { "`choose` expects at least one option" }
@@ -99,6 +105,9 @@ object NarrativeBuiltinFunctions {
 
     private class ChooseIndexedFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "chooseIndexed"
+        override val signature: KatariCallableSignature = KatariCallableSignature(
+            valueTypes = listOf(KatariTypes.Any.nullable().repeated()),
+        )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.isNotEmpty()) { "`chooseIndexed` expects at least one option" }
@@ -135,6 +144,9 @@ object NarrativeBuiltinFunctions {
 
     private class ChooseExhaustibleFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "chooseExhaustible"
+        override val signature: KatariCallableSignature = KatariCallableSignature(
+            valueTypes = listOf(KatariTypes.Any.nullable().repeated()),
+        )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.any { it != KatariValue.Null }) { "`chooseExhaustible` expects at least one non-null option" }
@@ -169,6 +181,14 @@ object NarrativeBuiltinFunctions {
 
     private data object ChoiceOptionFunction : KatariFunctionDefinition {
         override val id: String = "choiceOption"
+        override val signature: KatariCallableSignature = KatariCallableSignature(
+            valueTypes = listOf(
+                KatariTypes.Text,
+                KatariTypes.Boolean,
+                KatariTypes.Boolean,
+                KatariTypes.Text.nullable(),
+            ),
+        )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.size == 4) { "`choiceOption` expects (text, visible, enabled, disabledTextOrNull)" }
@@ -209,6 +229,9 @@ object NarrativeBuiltinFunctions {
 
     private class ReadLineFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "readLine"
+        override val signature: KatariCallableSignature = KatariCallableSignature(
+            valueTypes = listOf(KatariTypes.Text),
+        )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
             require(arguments.size == 1) { "`readLine` expects a single text question argument" }

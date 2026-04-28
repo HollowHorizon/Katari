@@ -1,5 +1,8 @@
 package com.sunnychung.lib.multiplatform.kotlite.katari
 
+import com.sunnychung.lib.multiplatform.kotlite.model.DataType
+import com.sunnychung.lib.multiplatform.kotlite.model.ObjectType
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Polymorphic
@@ -300,12 +303,7 @@ sealed interface FunctionResult {
 
 interface KatariFunctionDefinition {
     val id: String
-    val signature: KatariCallableSignature?
-        get() = null
-
-    fun matchScore(arguments: List<KatariValue>): Int? {
-        return signature?.matchScore(arguments) ?: 0
-    }
+    val signature: KatariCallableSignature
 
     suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult
 
@@ -324,66 +322,185 @@ interface KatariFunctionDefinition {
 
 data class KatariFunctionRegistry(
     private val functionsById: Map<String, List<KatariFunctionDefinition>>,
+    private val typeRegistry: KatariTypeRegistry = KatariTypeRegistry.Empty,
 ) {
-    constructor(functions: List<KatariFunctionDefinition>) : this(
+    constructor(functions: List<KatariFunctionDefinition>, typeRegistry: KatariTypeRegistry = KatariTypeRegistry.Empty) : this(
         functions.groupBy { it.id },
+        typeRegistry,
     )
 
-    fun definition(id: String, arguments: List<KatariValue> = emptyList()): KatariFunctionDefinition {
+    fun definition(id: String): KatariFunctionDefinition {
+        val candidates = functionsById[id]
+            ?: throw IllegalArgumentException("No narrative function is registered for id `$id`")
+        require(candidates.size == 1) {
+            "Katari function lookup `$id` requires arguments because ${candidates.size} overloads are registered"
+        }
+        return candidates.single()
+    }
+
+    fun definition(id: String, arguments: List<KatariValue>): KatariFunctionDefinition {
         val candidates = functionsById[id]
             ?: throw IllegalArgumentException("No narrative function is registered for id `$id`")
         val matched = candidates.mapNotNull { definition ->
-            definition.matchScore(arguments)?.let { score -> definition to score }
+            definition.signature.match(arguments, typeRegistry)?.let { match -> definition to match }
         }
-        val bestScore = matched.maxOfOrNull { it.second }
+        val bestMatch = matched.minWithOrNull(
+            compareBy<Pair<KatariFunctionDefinition, KatariSignatureMatch>> { it.second.totalDistance }
+                .thenBy { it.second.anyMatches }
+        )
             ?: throw IllegalArgumentException("No katari function overload `$id` matches arguments: $arguments")
-        val best = matched.filter { it.second == bestScore }.map { it.first }
+        val best = matched.filter { it.second == bestMatch.second }.map { it.first }
         require(best.size == 1) {
-            "Katari function call `$id` is ambiguous for arguments: $arguments"
+            "Katari function call `$id` is ambiguous for arguments: $arguments. Candidates: ${
+                best.joinToString { it.signature.displayName }
+            }"
         }
         return best.single()
     }
 }
 
 data class KatariCallableSignature(
-    val dispatchReceiverTypeId: String? = null,
-    val valueTypes: List<String> = emptyList(),
+    val dispatchReceiverType: KatariParameterType? = null,
+    val valueTypes: List<KatariParameterType> = emptyList(),
+    val typeParameters: List<KatariTypeParameter> = emptyList(),
 ) {
-    fun matchScore(arguments: List<KatariValue>): Int? {
-        val receiverOffset = if (dispatchReceiverTypeId != null) 1 else 0
-        if (arguments.size != valueTypes.size + receiverOffset) {
+    val displayName: String
+        get() = buildString {
+            if (typeParameters.isNotEmpty()) {
+                append(typeParameters.joinToString(prefix = "<", postfix = ">") { it.name })
+            }
+            dispatchReceiverType?.let { append("${it.displayName}.") }
+            append("(")
+            append(valueTypes.joinToString { it.displayName })
+            append(")")
+        }
+
+    fun match(arguments: List<KatariValue>, typeRegistry: KatariTypeRegistry): KatariSignatureMatch? {
+        val receiverOffset = if (dispatchReceiverType != null) 1 else 0
+        val repeatedType = valueTypes.lastOrNull()?.takeIf { it.isRepeated }
+        val fixedValueCount = valueTypes.size - if (repeatedType != null) 1 else 0
+        val valueArgumentCount = arguments.size - receiverOffset
+        if (valueArgumentCount < fixedValueCount) {
             return null
         }
-        var score = 1
-        if (dispatchReceiverTypeId != null) {
-            score += arguments.first().matchType(dispatchReceiverTypeId) ?: return null
+        if (repeatedType == null && valueArgumentCount != valueTypes.size) {
+            return null
+        }
+        val distances = mutableListOf<Int>()
+        dispatchReceiverType?.let {
+            distances += arguments.firstOrNull()?.matchType(it, typeRegistry) ?: return null
         }
         valueTypes.forEachIndexed { index, typeId ->
-            score += arguments[index + receiverOffset].matchType(typeId) ?: return null
+            if (typeId.isRepeated) {
+                for (argumentIndex in index until valueArgumentCount) {
+                    distances += arguments[argumentIndex + receiverOffset].matchType(typeId.copy(isRepeated = false), typeRegistry)
+                        ?: return null
+                }
+            } else {
+                distances += arguments[index + receiverOffset].matchType(typeId, typeRegistry) ?: return null
+            }
         }
-        return score
+        return KatariSignatureMatch(
+            distances = distances,
+            anyMatches = distances.count { it == KatariTypeRegistry.AnyDistance },
+        )
     }
 }
 
-private fun KatariValue.matchType(typeId: String): Int? {
-    val isNullable = typeId.endsWith("?")
-    val normalized = typeId.removeSuffix("?")
-    if (this == KatariValue.Null) {
-        return if (isNullable) 1 else null
+data class KatariSignatureMatch(
+    val distances: List<Int>,
+    val anyMatches: Int,
+) {
+    val totalDistance: Int = distances.sum()
+}
+
+data class KatariTypeRegistry(
+    private val directSuperTypesByTypeId: Map<String, List<String>>,
+) {
+    constructor(types: Iterable<KatariType<out Any>>) : this(
+        types.associate { type -> type.typeId to type.superTypes.map { it.typeId } },
+    )
+
+    fun distance(actualTypeId: String, expectedTypeId: String): Int? {
+        if (expectedTypeId == "Any") return AnyDistance
+        if (actualTypeId == expectedTypeId) return 0
+        val visited = mutableSetOf<String>()
+        var frontier = listOf(actualTypeId to 0)
+        while (frontier.isNotEmpty()) {
+            val next = mutableListOf<Pair<String, Int>>()
+            frontier.forEach { (typeId, distance) ->
+                if (!visited.add(typeId)) return@forEach
+                directSuperTypesByTypeId[typeId].orEmpty().forEach { parent ->
+                    if (parent == expectedTypeId) return distance + 1
+                    next += parent to distance + 1
+                }
+            }
+            frontier = next
+        }
+        return null
     }
-    return when (normalized) {
-        "Any" -> 1
-        "String" -> if (this is KatariValue.Text) 4 else null
-        "Boolean" -> if (this is KatariValue.Bool) 4 else null
-        "Int" -> if (this is KatariValue.Int32) 4 else null
+
+    fun mergedWith(other: KatariTypeRegistry): KatariTypeRegistry {
+        return KatariTypeRegistry(
+            directSuperTypesByTypeId + other.directSuperTypesByTypeId,
+        )
+    }
+
+    companion object {
+        val Empty = KatariTypeRegistry(emptyMap())
+        const val AnyDistance = 1000
+    }
+}
+
+private fun KatariValue.matchType(type: KatariParameterType, typeRegistry: KatariTypeRegistry): Int? {
+    if (this == KatariValue.Null) {
+        return if (type.isNullable) 0 else null
+    }
+    if (type.typeParameterName != null) {
+        return matchType(type.upperBound ?: KatariTypes.Any, typeRegistry)
+    }
+    val expectedTypeId = type.typeId
+    val actualTypeId = katariRuntimeTypeId()
+    return when (expectedTypeId) {
+        "Any" -> KatariTypeRegistry.AnyDistance
+        "String" -> if (this is KatariValue.Text) 0 else null
+        "Boolean" -> if (this is KatariValue.Bool) 0 else null
+        "Int" -> if (this is KatariValue.Int32) 0 else null
         "Double" -> when (this) {
-            is KatariValue.Float64 -> 4
-            is KatariValue.Int32 -> 2
+            is KatariValue.Float64 -> 0
+            is KatariValue.Int32 -> 1
             else -> null
         }
-        "Function" -> if (this is KatariValue.Lambda) 4 else null
-        else -> if (this is KatariValue.HostObject && this.typeId == normalized) 4 else null
+        "Function" -> if (this is KatariValue.Lambda) 0 else null
+        else -> {
+            actualTypeId?.let { typeRegistry.distance(it, expectedTypeId) }
+                ?: runtimeValueTypeDistance(type)
+        }
     }
+}
+
+private fun KatariValue.katariRuntimeTypeId(): String? = when (this) {
+    KatariValue.Null -> null
+    is KatariValue.Bool -> "Boolean"
+    is KatariValue.Int32 -> "Int"
+    is KatariValue.Float64 -> "Double"
+    is KatariValue.Text -> "String"
+    is KatariValue.Lambda -> "Function"
+    is KatariValue.HostObject -> typeId
+}
+
+private fun KatariValue.runtimeValueTypeDistance(type: KatariParameterType): Int? {
+    val value = (this as? KatariValue.HostObject)?.value as? RuntimeValue ?: return null
+    return value.type().distanceTo(type)
+}
+
+private fun DataType.distanceTo(type: KatariParameterType): Int? {
+    if (isNullable && !type.isNullable) return null
+    if (name == type.typeId) return 0
+    return (this as? ObjectType)
+        ?.findSuperType(type.typeId)
+        ?.takeIf { !it.isNullable || type.isNullable }
+        ?.let { 1 }
 }
 
 @Serializable
