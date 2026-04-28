@@ -22,6 +22,7 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatus
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueRestoreContext
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.asParameterType
+import com.sunnychung.lib.multiplatform.kotlite.katari.asValueParameter
 import com.sunnychung.lib.multiplatform.kotlite.katari.toKatari
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
@@ -82,7 +83,7 @@ class NarrativeBindingsTest {
             register(
                 SuspendableKatariFunctionDefinition(
                     id = "promptFlag",
-                    signature = KatariCallableSignature(),
+                    signature = KatariCallableSignature(returnType = KatariTypes.Boolean),
                     onDispatch = { _, _, resume -> resume(PromptFlagResponse(true)) },
                     onResume = { _, response, _ -> KatariValue.Bool((response as PromptFlagResponse).enabled) },
                 )
@@ -124,7 +125,10 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "append",
-                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Text)),
+                    signature = KatariCallableSignature(
+                        valueParameters = listOf(KatariTypes.Text.asValueParameter("text")),
+                        returnType = KatariTypes.Unit,
+                    ),
                     execute = { arguments, _ ->
                         events += (arguments.single() as KatariValue.Text).value
                         KatariValue.Null
@@ -286,7 +290,7 @@ class NarrativeBindingsTest {
         val bindings = NarrativeBindings {
             immediateFunction(
                 name = "describe",
-                valueParameters = listOf(KatariTypes.Int),
+                valueParameters = listOf(KatariTypes.Int.asValueParameter("value")),
                 execute = { _, arguments, _ ->
                     events += "int:${(arguments.single() as KatariValue.Int32).value}"
                     KatariValue.Null
@@ -294,7 +298,7 @@ class NarrativeBindingsTest {
             )
             immediateFunction(
                 name = "describe",
-                valueParameters = listOf(KatariTypes.Text),
+                valueParameters = listOf(KatariTypes.Text.asValueParameter("value")),
                 execute = { _, arguments, _ ->
                     events += "text:${(arguments.single() as KatariValue.Text).value}"
                     KatariValue.Null
@@ -494,7 +498,10 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "capture",
-                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Any)),
+                    signature = KatariCallableSignature(
+                        valueParameters = listOf(KatariTypes.Any.asValueParameter("value")),
+                        returnType = KatariTypes.Unit,
+                    ),
                     execute = { arguments, _ ->
                         val value = assertIs<KatariValue.HostObject>(arguments.single()).value as RuntimeValue
                         val holder = assertIs<KotlinValueHolder<*>>(value)
@@ -539,10 +546,14 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "capture",
-                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Any)),
+                    signature = KatariCallableSignature(
+                        valueParameters = listOf(KatariTypes.Any.asValueParameter("value")),
+                        returnType = KatariTypes.Unit,
+                    ),
                     execute = { arguments, _ ->
                         events += when (val value = arguments.single()) {
                             KatariValue.Null -> "null"
+                            KatariValue.DefaultArgument -> "<default>"
                             is KatariValue.Bool -> value.value.toString()
                             is KatariValue.Int32 -> value.value.toString()
                             is KatariValue.Float64 -> value.value.toString()
@@ -591,10 +602,14 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "capture",
-                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Any)),
+                    signature = KatariCallableSignature(
+                        valueParameters = listOf(KatariTypes.Any.asValueParameter("value")),
+                        returnType = KatariTypes.Unit,
+                    ),
                     execute = { arguments, _ ->
                         events += when (val value = arguments.single()) {
                             KatariValue.Null -> "null"
+                            KatariValue.DefaultArgument -> "<default>"
                             is KatariValue.Bool -> value.value.toString()
                             is KatariValue.Int32 -> value.value.toString()
                             is KatariValue.Float64 -> value.value.toString()
@@ -682,10 +697,14 @@ class NarrativeBindingsTest {
             register(
                 ImmediateKatariFunctionDefinition(
                     id = "capture",
-                    signature = KatariCallableSignature(valueTypes = listOf(KatariTypes.Any)),
+                    signature = KatariCallableSignature(
+                        valueParameters = listOf(KatariTypes.Any.asValueParameter("value")),
+                        returnType = KatariTypes.Unit,
+                    ),
                     execute = { arguments, _ ->
                         events += when (val value = arguments.single()) {
                             KatariValue.Null -> "null"
+                            KatariValue.DefaultArgument -> "<default>"
                             is KatariValue.Bool -> value.value.toString()
                             is KatariValue.Int32 -> value.value.toString()
                             is KatariValue.Float64 -> value.value.toString()
@@ -803,10 +822,10 @@ class NarrativeBindingsTest {
             register(NarrativeBuiltinFunctions.definitions(host))
             registerHostType(typeA)
             registerHostType(typeB)
-            immediateFunction("A", listOf(KatariParameterType("String"))) { _, args, _ ->
+            immediateFunction("A", listOf(KatariParameterType("String").asValueParameter("name"))) { _, args, _ ->
                 KatariValue.HostObject("type_a", A((args[0] as KatariValue.Text).value))
             }
-            immediateFunction("B", listOf(KatariParameterType("String"))) { _, args, _ ->
+            immediateFunction("B", listOf(KatariParameterType("String").asValueParameter("name"))) { _, args, _ ->
                 KatariValue.HostObject("type_b", B((args[0] as KatariValue.Text).value))
             }
 
@@ -844,6 +863,155 @@ class NarrativeBindingsTest {
 
         assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("B::Test", "A::Test"), events)
+    }
+
+    @Test
+    fun registeredFunctionsSupportNamedAndDefaultArguments() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            importExecutionEnvironmentFunctions(false)
+            immediateFunction(
+                name = "format",
+                valueParameters = listOf(
+                    KatariTypes.Text.asValueParameter("prefix", defaultValue = KatariValue.Text("default")),
+                    KatariTypes.Text.asValueParameter("suffix"),
+                ),
+                returnType = KatariTypes.Text,
+            ) { _, args, _ ->
+                KatariValue.Text("${(args[0] as KatariValue.Text).value}:${(args[1] as KatariValue.Text).value}")
+            }
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(KatariTypes.Text.asValueParameter("value")),
+            ) { _, args, _ ->
+                events += (args.single() as KatariValue.Text).value
+                KatariValue.Null
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    capture(format(suffix = "named"))
+                    capture(format("explicit", suffix = "mixed"))
+                """.trimIndent(),
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("default:named", "explicit:mixed"), events)
+    }
+
+    @Test
+    fun userFunctionsSupportNamedAndDefaultArguments() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            registerBuiltinFunctions(object : NarrativeHost {
+                override fun narrate(text: String, resume: () -> Unit) {
+                    events += text
+                    resume()
+                }
+
+                override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+                override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+            })
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    fun combine(prefix: String = "default", suffix: String = "value"): String {
+                        return "${'$'}prefix:${'$'}suffix"
+                    }
+
+                    narrate(combine(suffix = "named"))
+                    narrate(combine("explicit", suffix = "mixed"))
+                """.trimIndent(),
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("default:named", "explicit:mixed"), events)
+    }
+
+    @Test
+    fun executionEnvironmentFunctionsSupportNamedAndDefaultArguments() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            registerKotliteFunction(
+                CustomFunctionDefinition(
+                    position = SourcePosition.NONE,
+                    receiverType = null,
+                    functionName = "bridgeFormat",
+                    returnType = "String",
+                    parameterTypes = listOf(
+                        CustomFunctionParameter("prefix", "String", "\"default\""),
+                        CustomFunctionParameter("suffix", "String"),
+                    ),
+                    executable = { interpreter, _, args, _ ->
+                        StringValue(
+                            value = "${(args[0] as StringValue).value}:${(args[1] as StringValue).value}",
+                            symbolTable = interpreter.symbolTable(),
+                        )
+                    },
+                )
+            )
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(KatariTypes.Text.asValueParameter("value")),
+            ) { _, args, _ ->
+                events += (args.single() as KatariValue.Text).value
+                KatariValue.Null
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    capture(bridgeFormat(suffix = "named"))
+                    capture(bridgeFormat("explicit", suffix = "mixed"))
+                """.trimIndent(),
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("default:named", "explicit:mixed"), events)
     }
 }
 

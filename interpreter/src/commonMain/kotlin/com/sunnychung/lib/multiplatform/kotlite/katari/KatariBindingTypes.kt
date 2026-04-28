@@ -27,8 +27,37 @@ data class KatariTypeParameter(
     val upperBound: KatariParameterType = KatariTypes.Any,
 )
 
+data class KatariValueParameter(
+    val name: String,
+    val type: KatariParameterType,
+    val defaultValue: KatariValue? = null,
+    val hasDefault: Boolean = defaultValue != null,
+) {
+    val displayName: String
+        get() = buildString {
+            append(name)
+            append(": ")
+            append(type.displayName)
+            if (hasDefault) append(" = ...")
+        }
+}
+
+fun KatariParameterType.asValueParameter(
+    name: String,
+    defaultValue: KatariValue? = null,
+    hasDefault: Boolean = defaultValue != null,
+): KatariValueParameter {
+    return KatariValueParameter(
+        name = name,
+        type = this,
+        defaultValue = defaultValue,
+        hasDefault = hasDefault,
+    )
+}
+
 object KatariTypes {
     val Any = KatariParameterType("Any")
+    val Unit = KatariParameterType("Unit")
     val Text = KatariParameterType("String")
     val Boolean = KatariParameterType("Boolean")
     val Int = KatariParameterType("Int")
@@ -46,6 +75,7 @@ fun KatariType<out Any>.asParameterType(): KatariParameterType = KatariTypes.hos
 
 data class KatariGlobalPropertyDefinition(
     val name: String,
+    val type: KatariParameterType,
     val getter: (() -> KatariValue)? = null,
     val setter: ((KatariValue) -> Unit)? = null,
 ) {

@@ -91,6 +91,7 @@ class NarrativeBindingsBuilder {
                 id = name,
                 signature = KatariCallableSignature(
                     dispatchReceiverType = type.asParameterType(),
+                    returnType = KatariTypes.Unit,
                 ),
                 execute = { arguments, context ->
                     val receiver = arguments.extractHostReceiver(type, name)
@@ -126,6 +127,7 @@ class NarrativeBindingsBuilder {
                 id = name,
                 signature = KatariCallableSignature(
                     dispatchReceiverType = type.asParameterType(),
+                    returnType = KatariTypes.Unit,
                 ),
                 onStart = { arguments, context ->
                     val receiver = arguments.extractHostReceiver(type, name)
@@ -153,8 +155,9 @@ class NarrativeBindingsBuilder {
 
     fun immediateFunction(
         name: String,
-        valueParameters: List<KatariParameterType> = emptyList(),
+        valueParameters: List<KatariValueParameter> = emptyList(),
         dispatchReceiver: KatariParameterType? = null,
+        returnType: KatariParameterType = KatariTypes.Unit,
         execute: suspend (
             receiver: KatariValue?,
             arguments: List<KatariValue>,
@@ -166,7 +169,8 @@ class NarrativeBindingsBuilder {
                 id = name,
                 signature = KatariCallableSignature(
                     dispatchReceiverType = dispatchReceiver,
-                    valueTypes = valueParameters,
+                    valueParameters = valueParameters,
+                    returnType = returnType,
                 ),
                 execute = { arguments, context ->
                     val receiverOffset = if (dispatchReceiver != null) 1 else 0
@@ -183,7 +187,8 @@ class NarrativeBindingsBuilder {
     fun <T : Any> immediateMemberFunction(
         type: KatariType<T>,
         name: String,
-        valueParameters: List<KatariParameterType> = emptyList(),
+        valueParameters: List<KatariValueParameter> = emptyList(),
+        returnType: KatariParameterType = KatariTypes.Unit,
         execute: suspend (
             receiver: T,
             arguments: List<KatariValue>,
@@ -193,6 +198,7 @@ class NarrativeBindingsBuilder {
         name = name,
         valueParameters = valueParameters,
         dispatchReceiver = type.asParameterType(),
+        returnType = returnType,
         execute = { receiver, arguments, context ->
             val hostReceiver = listOf(requireNotNull(receiver)).extractHostReceiver(type, name)
             execute(hostReceiver, arguments, context)
@@ -201,10 +207,11 @@ class NarrativeBindingsBuilder {
 
     fun globalProperty(
         name: String,
+        type: KatariParameterType = KatariTypes.Any,
         getter: (() -> KatariValue)? = null,
         setter: ((KatariValue) -> Unit)? = null,
     ): NarrativeBindingsBuilder = apply {
-        globalProperties[name] = KatariGlobalPropertyDefinition(name = name, getter = getter, setter = setter)
+        globalProperties[name] = KatariGlobalPropertyDefinition(name = name, type = type, getter = getter, setter = setter)
     }
 
     fun extensionProperty(
@@ -219,6 +226,7 @@ class NarrativeBindingsBuilder {
             immediateFunction(
                 name = name,
                 dispatchReceiver = receiver,
+                returnType = valueType,
                 execute = { receiverValue, _, context -> getter(requireNotNull(receiverValue), context) },
             )
         }
@@ -226,7 +234,7 @@ class NarrativeBindingsBuilder {
             immediateFunction(
                 name = name,
                 dispatchReceiver = receiver,
-                valueParameters = listOf(valueType),
+                valueParameters = listOf(valueType.asValueParameter("value")),
                 execute = { receiverValue, arguments, context ->
                     setter(requireNotNull(receiverValue), arguments.single(), context)
                     KatariValue.Null
@@ -538,16 +546,16 @@ private class ExecutionEnvironmentKatariFunctionDefinition(
     private fun splitReceiver(
         overload: FunctionDeclarationNode,
         arguments: List<KatariValue>,
-    ): Pair<RuntimeValue?, List<RuntimeValue>> = if (overload.receiver != null) {
-        arguments.first().toRuntimeValue(interpreter) to arguments.drop(1).map { it.toRuntimeValue(interpreter) }
+    ): Pair<RuntimeValue?, List<RuntimeValue?>> = if (overload.receiver != null) {
+        arguments.first().toRuntimeValue(interpreter) to arguments.drop(1).map { it.toRuntimeValueOrDefault(interpreter) }
     } else {
-        null to arguments.map { it.toRuntimeValue(interpreter) }
+        null to arguments.map { it.toRuntimeValueOrDefault(interpreter) }
     }
 
     private fun inferTypeArguments(
         overload: FunctionDeclarationNode,
         receiver: RuntimeValue?,
-        arguments: List<RuntimeValue>,
+        arguments: List<RuntimeValue?>,
     ): Map<String, TypeNode> {
         if (overload.typeParameters.isEmpty()) {
             return emptyMap()
@@ -563,12 +571,12 @@ private class ExecutionEnvironmentKatariFunctionDefinition(
             val parameterType = parameterTypes.singleOrNull()
             if (parameterType != null) {
                 arguments.forEach { argument ->
-                    collectTypeArguments(parameterType, argument.type(), overload.typeParameters, inferred)
+                    argument?.let { collectTypeArguments(parameterType, it.type(), overload.typeParameters, inferred) }
                 }
             }
         } else {
             parameterTypes.zip(arguments).forEach { (parameterType, argument) ->
-                collectTypeArguments(parameterType, argument.type(), overload.typeParameters, inferred)
+                argument?.let { collectTypeArguments(parameterType, it.type(), overload.typeParameters, inferred) }
             }
         }
 
@@ -676,19 +684,24 @@ private fun FunctionDeclarationNode.toKatariSignature(): KatariCallableSignature
                 ?: KatariTypes.Any,
         )
     }
-    val valueTypes = if (isNarrativeVararg()) {
+    val signatureValueParameters = if (isNarrativeVararg()) {
         valueParameters.singleOrNull()?.declaredType?.toKatariParameterType(typeParameters)?.repeated()
-            ?.let { listOf(it) }
-            ?: listOf(KatariTypes.Any.repeated())
+            ?.let { listOf(it.asValueParameter(valueParameters.single().name)) }
+            ?: listOf(KatariTypes.Any.repeated().asValueParameter("args"))
     } else {
         valueParameters.map { parameter ->
-            parameter.declaredType?.toKatariParameterType(typeParameters) ?: KatariTypes.Any
+            KatariValueParameter(
+                name = parameter.name,
+                type = parameter.declaredType?.toKatariParameterType(typeParameters) ?: KatariTypes.Any,
+                hasDefault = parameter.defaultValue != null,
+            )
         }
     }
     return KatariCallableSignature(
         dispatchReceiverType = receiver?.toKatariParameterType(typeParameters),
-        valueTypes = valueTypes,
+        valueParameters = signatureValueParameters,
         typeParameters = signatureTypeParameters,
+        returnType = declaredReturnType?.toKatariParameterType(typeParameters) ?: KatariTypes.Any,
     )
 }
 
@@ -715,6 +728,7 @@ private fun ExtensionProperty.toKatariDefinitions(interpreter: Interpreter): Lis
                 signature = KatariCallableSignature(
                     dispatchReceiverType = receiver,
                     typeParameters = signatureTypeParameters,
+                    returnType = value,
                 ),
                 interpreter = interpreter,
                 property = this,
@@ -725,8 +739,9 @@ private fun ExtensionProperty.toKatariDefinitions(interpreter: Interpreter): Lis
                 id = declaredName,
                 signature = KatariCallableSignature(
                     dispatchReceiverType = receiver,
-                    valueTypes = listOf(value),
+                    valueParameters = listOf(value.asValueParameter("value")),
                     typeParameters = signatureTypeParameters,
+                    returnType = KatariTypes.Unit,
                 ),
                 interpreter = interpreter,
                 property = this,
@@ -738,8 +753,12 @@ private fun ExtensionProperty.toKatariDefinitions(interpreter: Interpreter): Lis
 
 private fun ClassDefinition.toKatariConstructorSignature(): KatariCallableSignature {
     return KatariCallableSignature(
-        valueTypes = primaryConstructor?.parameters.orEmpty().map { parameter ->
-            parameter.parameter.declaredType?.toKatariParameterType(typeParameters) ?: KatariTypes.Any
+        valueParameters = primaryConstructor?.parameters.orEmpty().map { parameter ->
+            KatariValueParameter(
+                name = parameter.parameter.name,
+                type = parameter.parameter.declaredType?.toKatariParameterType(typeParameters) ?: KatariTypes.Any,
+                hasDefault = parameter.parameter.defaultValue != null,
+            )
         },
         typeParameters = typeParameters.map { parameter ->
             KatariTypeParameter(
@@ -750,6 +769,7 @@ private fun ClassDefinition.toKatariConstructorSignature(): KatariCallableSignat
                     ?: KatariTypes.Any,
             )
         },
+        returnType = KatariParameterType(fullQualifiedName),
     )
 }
 
@@ -785,6 +805,7 @@ private fun DataType.asObjectType(): ObjectType? {
 private fun KatariValue.toRuntimeValue(interpreter: Interpreter): RuntimeValue {
     val symbolTable = interpreter.symbolTable()
     return when (this) {
+        KatariValue.DefaultArgument -> throw IllegalArgumentException("Default argument marker cannot be converted to RuntimeValue directly")
         KatariValue.Null -> NullValue
         is KatariValue.Bool -> BooleanValue(value, symbolTable)
         is KatariValue.Int32 -> IntValue(value, symbolTable)
@@ -801,6 +822,14 @@ private fun KatariValue.toRuntimeValue(interpreter: Interpreter): RuntimeValue {
                             "Use RuntimeValue-backed objects or narrative-native functions for this call."
                 )
         }
+    }
+}
+
+private fun KatariValue.toRuntimeValueOrDefault(interpreter: Interpreter): RuntimeValue? {
+    return if (this == KatariValue.DefaultArgument) {
+        null
+    } else {
+        toRuntimeValue(interpreter)
     }
 }
 

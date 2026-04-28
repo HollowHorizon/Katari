@@ -117,6 +117,7 @@ class StateSnapshotCodec(
     private fun serializeValue(value: KatariValue): ValueSnapshot {
         return when (value) {
             KatariValue.Null -> NullValueSnapshot
+            KatariValue.DefaultArgument -> throw IllegalArgumentException("Default argument marker cannot be snapshotted")
             is KatariValue.Bool -> BoolValueSnapshot(value.value)
             is KatariValue.Int32 -> Int32ValueSnapshot(value.value)
             is KatariValue.Float64 -> Float64ValueSnapshot(value.value)

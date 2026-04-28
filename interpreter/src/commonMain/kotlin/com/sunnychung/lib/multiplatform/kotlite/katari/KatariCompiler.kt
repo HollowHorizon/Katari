@@ -731,6 +731,7 @@ class KatariCompiler(
         resultTarget: ResultTarget? = null,
     ): KatariInstruction {
         val arguments = node.arguments.map { compileExpression(it.value, instructions) }
+        val argumentNames = node.arguments.map { it.name }
         require(arguments.none { it is LambdaLiteralExpression }) {
             "${node.position} Passing lambda arguments to external narrative functions is not supported yet"
         }
@@ -738,6 +739,7 @@ class KatariCompiler(
             is VariableReferenceNode -> CallFunctionInstruction(
                 functionId = function.variableName,
                 arguments = arguments,
+                argumentNames = argumentNames,
                 resultTarget = resultTarget,
                 position = node.position,
             )
@@ -745,6 +747,7 @@ class KatariCompiler(
                 CallFunctionInstruction(
                     functionId = function.member.name,
                     arguments = listOf(compileExpression(function.subject, instructions)) + arguments,
+                    argumentNames = listOf(null) + argumentNames,
                     resultTarget = resultTarget,
                     position = node.position,
                 )
@@ -918,7 +921,12 @@ class KatariCompiler(
                 ResolvedUserFunctionInvocation(
                     declaration = declaration,
                     receiverExpression = null,
-                    argumentExpressions = node.arguments.map { compileExpression(it.value, instructions) },
+                    argumentExpressions = compileCallArguments(
+                        callPosition = node.position,
+                        callArguments = node.arguments,
+                        parameters = declaration.valueParameters,
+                        instructions = instructions,
+                    ),
                 )
             }
             is NavigationNode -> {
@@ -926,7 +934,12 @@ class KatariCompiler(
                 ResolvedUserFunctionInvocation(
                     declaration = declaration,
                     receiverExpression = compileExpression(function.subject, instructions),
-                    argumentExpressions = node.arguments.map { compileExpression(it.value, instructions) },
+                    argumentExpressions = compileCallArguments(
+                        callPosition = node.position,
+                        callArguments = node.arguments,
+                        parameters = declaration.valueParameters,
+                        instructions = instructions,
+                    ),
                 )
             }
             else -> null
@@ -1092,6 +1105,47 @@ class KatariCompiler(
         return compileExpression(value, instructions)
     }
 
+    private fun compileCallArguments(
+        callPosition: SourcePosition,
+        callArguments: List<FunctionCallArgumentNode>,
+        parameters: List<FunctionValueParameterNode>,
+        instructions: MutableList<KatariInstruction>,
+    ): List<KatariExpression> {
+        require(!callArguments.hasPositionalArgumentAfterNamedArgument()) {
+            "$callPosition Positional arguments cannot follow named arguments"
+        }
+        val positionalArguments = callArguments.takeWhile { it.name == null }.toMutableList()
+        val namedArguments = callArguments.drop(positionalArguments.size)
+        val namedByName = linkedMapOf<String, FunctionCallArgumentNode>()
+        namedArguments.forEach { argument ->
+            val name = argument.name ?: return@forEach
+            require(namedByName.put(name, argument) == null) {
+                "${argument.position} Argument `$name` is provided more than once"
+            }
+        }
+        return parameters.map { parameter ->
+            val argument = if (positionalArguments.isNotEmpty()) {
+                positionalArguments.removeAt(0)
+            } else {
+                namedByName.remove(parameter.name)
+            }
+            when {
+                argument != null -> compileArgumentExpression(argument, parameter, instructions)
+                parameter.defaultValue != null -> compileExpression(parameter.defaultValue, instructions)
+                else -> throw IllegalArgumentException(
+                    "$callPosition Missing argument `${parameter.name}`"
+                )
+            }
+        }.also {
+            require(positionalArguments.isEmpty()) {
+                "$callPosition Too many positional arguments"
+            }
+            require(namedByName.isEmpty()) {
+                "$callPosition Unknown named argument `${namedByName.keys.first()}`"
+            }
+        }
+    }
+
     private fun registerLambda(lambda: LambdaLiteralNode, expectedType: FunctionTypeNode? = null): String {
         val expectedParameterTypes = expectedType?.parameterTypes.orEmpty()
         val explicitValueParameters = lambda.valueParameters
@@ -1179,14 +1233,17 @@ class KatariCompiler(
                         it.receiver == null &&
                         FunctionModifier.inline in it.modifiers &&
                         it.body != null &&
-                        matchesArgumentShape(it, node.arguments.size)
+                        matchesArgumentShape(it, node.arguments)
                 } ?: return null
                 ResolvedUserFunctionInvocation(
                     declaration = declaration,
                     receiverExpression = null,
-                    argumentExpressions = node.arguments.mapIndexed { index, argument ->
-                        compileArgumentExpression(argument, declaration.valueParameters.getOrNull(index), instructions)
-                    },
+                    argumentExpressions = compileCallArguments(
+                        callPosition = node.position,
+                        callArguments = node.arguments,
+                        parameters = declaration.valueParameters,
+                        instructions = instructions,
+                    ),
                 )
             }
             is NavigationNode -> {
@@ -1195,14 +1252,17 @@ class KatariCompiler(
                         it.receiver != null &&
                         FunctionModifier.inline in it.modifiers &&
                         it.body != null &&
-                        matchesArgumentShape(it, node.arguments.size)
+                        matchesArgumentShape(it, node.arguments)
                 } ?: return null
                 ResolvedUserFunctionInvocation(
                     declaration = declaration,
                     receiverExpression = compileExpression(function.subject, instructions),
-                    argumentExpressions = node.arguments.mapIndexed { index, argument ->
-                        compileArgumentExpression(argument, declaration.valueParameters.getOrNull(index), instructions)
-                    },
+                    argumentExpressions = compileCallArguments(
+                        callPosition = node.position,
+                        callArguments = node.arguments,
+                        parameters = declaration.valueParameters,
+                        instructions = instructions,
+                    ),
                 )
             }
             else -> null
@@ -1211,13 +1271,14 @@ class KatariCompiler(
 
     private fun matchesArgumentShape(
         declaration: FunctionDeclarationNode,
-        argumentCount: Int,
+        arguments: List<FunctionCallArgumentNode>,
     ): Boolean {
-        return if (declaration.isNarrativeVararg()) {
-            declaration.valueParameters.size <= 1
-        } else {
-            declaration.valueParameters.size == argumentCount
+        if (declaration.isNarrativeVararg()) {
+            return declaration.valueParameters.size <= 1
         }
+        return runCatching {
+            matchCallArgumentShape(arguments, declaration.valueParameters)
+        }.getOrDefault(false)
     }
 
     private fun compileStringExpression(
@@ -1332,4 +1393,39 @@ private data class ResolvedUserFunctionInvocation(
 private fun FunctionDeclarationNode.isNarrativeVararg(): Boolean {
     return isVararg ||
         valueParameters.firstOrNull()?.modifiers?.contains(FunctionValueParameterModifier.vararg) == true
+}
+
+private fun List<FunctionCallArgumentNode>.hasPositionalArgumentAfterNamedArgument(): Boolean {
+    var hasNamedArgument = false
+    forEach { argument ->
+        if (argument.name != null) {
+            hasNamedArgument = true
+        } else if (hasNamedArgument) {
+            return true
+        }
+    }
+    return false
+}
+
+private fun matchCallArgumentShape(
+    arguments: List<FunctionCallArgumentNode>,
+    parameters: List<FunctionValueParameterNode>,
+): Boolean {
+    if (arguments.hasPositionalArgumentAfterNamedArgument()) return false
+    val positionalArguments = arguments.takeWhile { it.name == null }.toMutableList()
+    val namedArguments = arguments.drop(positionalArguments.size)
+    val namedByName = linkedMapOf<String, FunctionCallArgumentNode>()
+    namedArguments.forEach { argument ->
+        val name = argument.name ?: return false
+        if (namedByName.put(name, argument) != null) return false
+    }
+    parameters.forEach { parameter ->
+        val argument = if (positionalArguments.isNotEmpty()) {
+            positionalArguments.removeAt(0)
+        } else {
+            namedByName.remove(parameter.name)
+        }
+        if (argument == null && parameter.defaultValue == null) return false
+    }
+    return positionalArguments.isEmpty() && namedByName.isEmpty()
 }

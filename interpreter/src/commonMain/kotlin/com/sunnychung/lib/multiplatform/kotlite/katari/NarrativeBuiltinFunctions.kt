@@ -34,7 +34,8 @@ object NarrativeBuiltinFunctions {
     private class NarrateFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "narrate"
         override val signature: KatariCallableSignature = KatariCallableSignature(
-            valueTypes = listOf(KatariTypes.Any),
+            valueParameters = listOf(KatariTypes.Any.asValueParameter("text")),
+            returnType = KatariTypes.Unit,
         )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
@@ -68,7 +69,8 @@ object NarrativeBuiltinFunctions {
     private class ChooseFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "choose"
         override val signature: KatariCallableSignature = KatariCallableSignature(
-            valueTypes = listOf(KatariTypes.Any.nullable().repeated()),
+            valueParameters = listOf(KatariTypes.Any.nullable().repeated().asValueParameter("options")),
+            returnType = KatariTypes.Text,
         )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
@@ -106,7 +108,8 @@ object NarrativeBuiltinFunctions {
     private class ChooseIndexedFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "chooseIndexed"
         override val signature: KatariCallableSignature = KatariCallableSignature(
-            valueTypes = listOf(KatariTypes.Any.nullable().repeated()),
+            valueParameters = listOf(KatariTypes.Any.nullable().repeated().asValueParameter("options")),
+            returnType = KatariTypes.Text,
         )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
@@ -145,7 +148,8 @@ object NarrativeBuiltinFunctions {
     private class ChooseExhaustibleFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "chooseExhaustible"
         override val signature: KatariCallableSignature = KatariCallableSignature(
-            valueTypes = listOf(KatariTypes.Any.nullable().repeated()),
+            valueParameters = listOf(KatariTypes.Any.nullable().repeated().asValueParameter("options")),
+            returnType = KatariTypes.Text,
         )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
@@ -182,12 +186,13 @@ object NarrativeBuiltinFunctions {
     private data object ChoiceOptionFunction : KatariFunctionDefinition {
         override val id: String = "choiceOption"
         override val signature: KatariCallableSignature = KatariCallableSignature(
-            valueTypes = listOf(
-                KatariTypes.Text,
-                KatariTypes.Boolean,
-                KatariTypes.Boolean,
-                KatariTypes.Text.nullable(),
+            valueParameters = listOf(
+                KatariTypes.Text.asValueParameter("text"),
+                KatariTypes.Boolean.asValueParameter("visible"),
+                KatariTypes.Boolean.asValueParameter("enabled"),
+                KatariTypes.Text.nullable().asValueParameter("disabledText"),
             ),
+            returnType = KatariParameterType(CHOICE_OPTION_TYPE_ID),
         )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
@@ -230,7 +235,8 @@ object NarrativeBuiltinFunctions {
     private class ReadLineFunction(private val host: NarrativeHost) : KatariFunctionDefinition {
         override val id: String = "readLine"
         override val signature: KatariCallableSignature = KatariCallableSignature(
-            valueTypes = listOf(KatariTypes.Text),
+            valueParameters = listOf(KatariTypes.Text.asValueParameter("question")),
+            returnType = KatariTypes.Text,
         )
 
         override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
@@ -278,6 +284,7 @@ internal data class ChoiceOptionValue(
 private fun KatariValue.asStringCompatible(): String {
     return when (this) {
         KatariValue.Null -> "null"
+        KatariValue.DefaultArgument -> "<default>"
         is KatariValue.Bool -> value.toString()
         is KatariValue.Int32 -> value.toString()
         is KatariValue.Float64 -> value.toString()

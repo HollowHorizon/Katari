@@ -228,9 +228,10 @@ class KatariInstance(
         task: TaskState,
         instruction: CallFunctionInstruction,
     ): FunctionDispatchRequest? {
-        val arguments = evaluateArguments(task, instruction)
+        val call = resolveFunctionCall(task, instruction)
         val referencedSlots = collectReferencedSlots(instruction.arguments)
-        val definition = functionRegistry.definition(instruction.functionId, arguments)
+        val definition = call.definition
+        val arguments = call.arguments
         return when (val result = definition.startCall(arguments, DefaultKatariFunctionContext(currentState, task))) {
             is FunctionResult.Returned -> {
                 currentState = currentState.updateTask(
@@ -269,11 +270,11 @@ class KatariInstance(
             }?.let { normalizeTask(it) } ?: return
             inFlightTasks += request.taskId
             val instruction = resolveSuspendedCallInstruction(task)
-            val arguments = evaluateArguments(task, instruction)
+            val call = resolveFunctionCall(task, instruction)
             DispatchData(
                 taskId = task.id,
-                arguments = arguments,
-                definition = functionRegistry.definition(instruction.functionId, arguments),
+                arguments = call.arguments,
+                definition = call.definition,
                 context = DefaultKatariFunctionContext(currentState, task),
             )
         }
@@ -316,9 +317,10 @@ class KatariInstance(
             val task = normalizeTask(currentState.tasks[taskIndex])
             val status = task.status as TaskStatus.SuspendedCall
             val instruction = resolveSuspendedCallInstruction(task)
-            val arguments = evaluateArguments(task, instruction)
+            val call = resolveFunctionCall(task, instruction)
             val referencedSlots = collectReferencedSlots(instruction.arguments)
-            val definition = functionRegistry.definition(instruction.functionId, arguments)
+            val definition = call.definition
+            val arguments = call.arguments
             try {
                 when (val result = definition.resumeCall(
                     arguments = arguments,
@@ -505,6 +507,26 @@ class KatariInstance(
         instruction: CallFunctionInstruction,
     ): List<KatariValue> {
         return instruction.arguments.map { evaluateExpression(currentState, task, it) }
+    }
+
+    private fun resolveFunctionCall(
+        task: TaskState,
+        instruction: CallFunctionInstruction,
+    ): KatariResolvedFunctionCall {
+        val argumentNames = instruction.argumentNames.takeIf { it.isNotEmpty() }
+            ?: List(instruction.arguments.size) { null }
+        require(argumentNames.size == instruction.arguments.size) {
+            "Call `${instruction.functionId}` has ${instruction.arguments.size} arguments but ${argumentNames.size} argument names"
+        }
+        return functionRegistry.resolve(
+            id = instruction.functionId,
+            arguments = instruction.arguments.mapIndexed { index, expression ->
+                KatariCallArgument(
+                    name = argumentNames[index],
+                    value = evaluateExpression(currentState, task, expression),
+                )
+            },
+        )
     }
 
     private fun evaluateExpression(
@@ -909,6 +931,7 @@ class KatariInstance(
     private fun KatariValue.asString(): String {
         return when (this) {
             KatariValue.Null -> "null"
+            KatariValue.DefaultArgument -> "<default>"
             is KatariValue.Bool -> value.toString()
             is KatariValue.Int32 -> value.toString()
             is KatariValue.Float64 -> value.toString()

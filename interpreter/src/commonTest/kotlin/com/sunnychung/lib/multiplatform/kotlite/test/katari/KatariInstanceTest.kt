@@ -33,6 +33,7 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.LambdaValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueCodec
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValueCodecRegistry
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueReferenceSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.asValueParameter
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueRestoreContext
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.SetResultInstruction
@@ -1388,7 +1389,8 @@ class TestNpcCodec : ValueCodec<TestNpcSnapshot> {
 object PromptFlagFunction : KatariFunctionDefinition {
     override val id: String = "promptFlag"
     override val signature: KatariCallableSignature = KatariCallableSignature(
-        valueTypes = listOf(KatariTypes.Text),
+        valueParameters = listOf(KatariTypes.Text.asValueParameter("message")),
+        returnType = KatariTypes.Boolean,
     )
 
     override suspend fun startCall(
