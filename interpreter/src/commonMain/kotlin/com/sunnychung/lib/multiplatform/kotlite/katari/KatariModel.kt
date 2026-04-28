@@ -16,6 +16,7 @@ data class KatariProgram(
     val instructions: List<KatariInstruction>,
     val entryTaskId: String = "main",
     val version: Int = 1,
+    val enumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
 )
 
 sealed interface KatariInstruction {
@@ -105,6 +106,29 @@ data class LambdaLiteralExpression(
     override val position: SourcePosition? = null,
 ) : KatariExpression
 
+data class EnumEntryExpression(
+    val typeId: String,
+    val entryName: String,
+    override val position: SourcePosition? = null,
+) : KatariExpression
+
+data class EnumEntriesExpression(
+    val typeId: String,
+    override val position: SourcePosition? = null,
+) : KatariExpression
+
+data class EnumValueOfExpression(
+    val typeId: String,
+    val entryName: KatariExpression,
+    override val position: SourcePosition? = null,
+) : KatariExpression
+
+data class EnumPropertyExpression(
+    val receiver: KatariExpression,
+    val propertyName: String,
+    override val position: SourcePosition? = null,
+) : KatariExpression
+
 data class UnaryExpression(
     val operator: UnaryOperator,
     val operand: KatariExpression,
@@ -156,8 +180,32 @@ sealed interface KatariValue {
     data class Float64(val value: Double) : KatariValue
     data class Text(val value: String) : KatariValue
     data class Lambda(val id: String) : KatariValue
+    data class EnumValue(
+        val typeId: String,
+        val entryName: String,
+        val ordinal: Int,
+        val properties: Map<String, KatariValue> = emptyMap(),
+    ) : KatariValue
+    data class EnumEntries(val typeId: String, val entries: List<EnumValue>) : KatariValue
     data class HostObject(val typeId: String, val value: Any) : KatariValue
 }
+
+data class KatariEnumDefinition(
+    val typeId: String,
+    val entries: List<KatariValue.EnumValue>,
+) {
+    private val entriesByName = entries.associateBy { it.entryName }
+
+    fun entry(name: String): KatariValue.EnumValue {
+        return entriesByName[name]
+            ?: throw IllegalArgumentException("Enum value `$name` not found in `$typeId`")
+    }
+}
+
+internal data class EnumEntriesIteratorValue(
+    val entries: List<KatariValue.EnumValue>,
+    var index: Int = 0,
+)
 
 data class KatariState(
     val programVersion: Int,
@@ -559,6 +607,8 @@ private fun KatariValue.katariRuntimeTypeId(): String? = when (this) {
     is KatariValue.Float64 -> "Double"
     is KatariValue.Text -> "String"
     is KatariValue.Lambda -> "Function"
+    is KatariValue.EnumValue -> typeId
+    is KatariValue.EnumEntries -> KATARI_ENUM_ENTRIES_TYPE_ID
     is KatariValue.HostObject -> typeId
 }
 
@@ -602,6 +652,29 @@ data class TextValueSnapshot(val value: String) : ValueSnapshot()
 @Serializable
 @SerialName("lambda")
 data class LambdaValueSnapshot(val id: String) : ValueSnapshot()
+
+@Serializable
+@SerialName("enum")
+data class EnumValueSnapshot(
+    val typeId: String,
+    val entryName: String,
+    val ordinal: Int,
+    val properties: Map<String, @Polymorphic ValueSnapshot> = emptyMap(),
+) : ValueSnapshot()
+
+@Serializable
+@SerialName("enum_entries")
+data class EnumEntriesValueSnapshot(
+    val typeId: String,
+    val entries: List<EnumValueSnapshot>,
+) : ValueSnapshot()
+
+@Serializable
+@SerialName("enum_entries_iterator")
+data class EnumEntriesIteratorValueSnapshot(
+    val entries: List<EnumValueSnapshot>,
+    val index: Int,
+) : ValueSnapshot()
 
 @Serializable
 @SerialName("choice_option")
@@ -704,6 +777,9 @@ data class KatariValueCodecRegistry(
                 subclass(Float64ValueSnapshot::class, Float64ValueSnapshot.serializer())
                 subclass(TextValueSnapshot::class, TextValueSnapshot.serializer())
                 subclass(LambdaValueSnapshot::class, LambdaValueSnapshot.serializer())
+                subclass(EnumValueSnapshot::class, EnumValueSnapshot.serializer())
+                subclass(EnumEntriesValueSnapshot::class, EnumEntriesValueSnapshot.serializer())
+                subclass(EnumEntriesIteratorValueSnapshot::class, EnumEntriesIteratorValueSnapshot.serializer())
                 subclass(RuntimeListValueSnapshot::class, RuntimeListValueSnapshot.serializer())
                 subclass(RuntimeMapValueSnapshot::class, RuntimeMapValueSnapshot.serializer())
                 subclass(RuntimePairValueSnapshot::class, RuntimePairValueSnapshot.serializer())
@@ -723,3 +799,5 @@ data class KatariValueCodecRegistry(
 
 internal const val ROOT_CALL_FRAME_ID: Int = 0
 internal const val ROOT_CALL_FRAME_FUNCTION_ID: String = "__main__"
+internal const val KATARI_ENUM_ENTRIES_TYPE_ID: String = "__katari_enum_entries"
+internal const val KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID: String = "__katari_enum_entries_iterator"

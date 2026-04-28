@@ -27,7 +27,15 @@ object NarrativeBuiltinFunctions {
             ChooseIndexedFunction(host),
             ChooseExhaustibleFunction(host),
             ChoiceOptionFunction,
-            ReadLineFunction(host)
+            ReadLineFunction(host),
+        ) + enumCollectionDefinitions()
+    }
+
+    internal fun enumCollectionDefinitions(): List<KatariFunctionDefinition> {
+        return listOf(
+            EnumEntriesIteratorFunction,
+            EnumEntriesHasNextFunction,
+            EnumEntriesNextFunction,
         )
     }
 
@@ -265,6 +273,88 @@ object NarrativeBuiltinFunctions {
             }
         }
     }
+
+    private data object EnumEntriesIteratorFunction : KatariFunctionDefinition {
+        override val id: String = "iterator"
+        override val signature: KatariCallableSignature = KatariCallableSignature(
+            valueParameters = listOf(KatariParameterType(KATARI_ENUM_ENTRIES_TYPE_ID).asValueParameter("entries")),
+            returnType = KatariParameterType(KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID),
+        )
+
+        override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
+            val entries = arguments.single() as? KatariValue.EnumEntries
+                ?: throw IllegalArgumentException("Enum entries iterator expects enum entries")
+            return FunctionResult.Returned(
+                KatariValue.HostObject(
+                    typeId = KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID,
+                    value = EnumEntriesIteratorValue(entries.entries),
+                )
+            )
+        }
+
+        override suspend fun resumeCall(
+            arguments: List<KatariValue>,
+            response: FunctionResponse?,
+            context: KatariFunctionContext,
+        ): FunctionResult = throw IllegalStateException("Enum entries iterator cannot be resumed")
+
+        override fun dispatch(
+            arguments: List<KatariValue>,
+            context: KatariFunctionDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
+        ) = throw IllegalStateException("Enum entries iterator cannot be dispatched")
+    }
+
+    private data object EnumEntriesHasNextFunction : KatariFunctionDefinition {
+        override val id: String = "hasNext"
+        override val signature: KatariCallableSignature = KatariCallableSignature(
+            valueParameters = listOf(KatariParameterType(KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID).asValueParameter("iterator")),
+            returnType = KatariTypes.Boolean,
+        )
+
+        override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
+            val iterator = arguments.single().enumEntriesIterator("hasNext")
+            return FunctionResult.Returned(KatariValue.Bool(iterator.index < iterator.entries.size))
+        }
+
+        override suspend fun resumeCall(
+            arguments: List<KatariValue>,
+            response: FunctionResponse?,
+            context: KatariFunctionContext,
+        ): FunctionResult = throw IllegalStateException("Enum entries hasNext cannot be resumed")
+
+        override fun dispatch(
+            arguments: List<KatariValue>,
+            context: KatariFunctionDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
+        ) = throw IllegalStateException("Enum entries hasNext cannot be dispatched")
+    }
+
+    private data object EnumEntriesNextFunction : KatariFunctionDefinition {
+        override val id: String = "next"
+        override val signature: KatariCallableSignature = KatariCallableSignature(
+            valueParameters = listOf(KatariParameterType(KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID).asValueParameter("iterator")),
+            returnType = KatariTypes.Any,
+        )
+
+        override suspend fun startCall(arguments: List<KatariValue>, context: KatariFunctionContext): FunctionResult {
+            val iterator = arguments.single().enumEntriesIterator("next")
+            require(iterator.index < iterator.entries.size) { "Enum entries iterator has no next value" }
+            return FunctionResult.Returned(iterator.entries[iterator.index++])
+        }
+
+        override suspend fun resumeCall(
+            arguments: List<KatariValue>,
+            response: FunctionResponse?,
+            context: KatariFunctionContext,
+        ): FunctionResult = throw IllegalStateException("Enum entries next cannot be resumed")
+
+        override fun dispatch(
+            arguments: List<KatariValue>,
+            context: KatariFunctionDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
+        ) = throw IllegalStateException("Enum entries next cannot be dispatched")
+    }
 }
 
 data class NarrativeTextResponse(
@@ -281,6 +371,16 @@ internal data class ChoiceOptionValue(
     val disabledText: String?,
 )
 
+private fun KatariValue.enumEntriesIterator(functionName: String): EnumEntriesIteratorValue {
+    val hostObject = this as? KatariValue.HostObject
+        ?: throw IllegalArgumentException("Enum entries `$functionName` expects iterator receiver")
+    require(hostObject.typeId == KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID) {
+        "Enum entries `$functionName` expects iterator receiver, got `${hostObject.typeId}`"
+    }
+    return hostObject.value as? EnumEntriesIteratorValue
+        ?: throw IllegalArgumentException("Enum entries iterator receiver is corrupted")
+}
+
 private fun KatariValue.asStringCompatible(): String {
     return when (this) {
         KatariValue.Null -> "null"
@@ -290,6 +390,8 @@ private fun KatariValue.asStringCompatible(): String {
         is KatariValue.Float64 -> value.toString()
         is KatariValue.Text -> value
         is KatariValue.Lambda -> "Lambda($id)"
+        is KatariValue.EnumValue -> entryName
+        is KatariValue.EnumEntries -> entries.joinToString(prefix = "[", postfix = "]") { it.entryName }
         is KatariValue.HostObject -> value.toString()
     }
 }

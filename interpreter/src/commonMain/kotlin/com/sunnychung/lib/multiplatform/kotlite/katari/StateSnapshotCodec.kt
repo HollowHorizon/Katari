@@ -123,6 +123,18 @@ class StateSnapshotCodec(
             is KatariValue.Float64 -> Float64ValueSnapshot(value.value)
             is KatariValue.Text -> TextValueSnapshot(value.value)
             is KatariValue.Lambda -> LambdaValueSnapshot(value.id)
+            is KatariValue.EnumValue -> EnumValueSnapshot(
+                typeId = value.typeId,
+                entryName = value.entryName,
+                ordinal = value.ordinal,
+                properties = value.properties.mapValues { (_, propertyValue) -> serializeValue(propertyValue) },
+            )
+            is KatariValue.EnumEntries -> EnumEntriesValueSnapshot(
+                typeId = value.typeId,
+                entries = value.entries.map {
+                    serializeValue(it) as EnumValueSnapshot
+                },
+            )
             is KatariValue.HostObject -> {
                 if (value.typeId == CHOICE_OPTION_TYPE_ID) {
                     val option = value.value as? ChoiceOptionValue
@@ -138,6 +150,13 @@ class StateSnapshotCodec(
                     )
                 } else if (value.value is RuntimeValue) {
                     serializeRuntimeValue(value.value)
+                } else if (value.typeId == KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID) {
+                    val iterator = value.value as? EnumEntriesIteratorValue
+                        ?: throw IllegalArgumentException("Enum entries iterator value is corrupted")
+                    EnumEntriesIteratorValueSnapshot(
+                        entries = iterator.entries.map { serializeValue(it) as EnumValueSnapshot },
+                        index = iterator.index,
+                    )
                 } else {
                     @Suppress("UNCHECKED_CAST")
                     (valueCodecs.codec(value.typeId) as ValueCodec<ValueSnapshot>)
@@ -158,6 +177,23 @@ class StateSnapshotCodec(
             is Float64ValueSnapshot -> KatariValue.Float64(snapshot.value)
             is TextValueSnapshot -> KatariValue.Text(snapshot.value)
             is LambdaValueSnapshot -> KatariValue.Lambda(snapshot.id)
+            is EnumValueSnapshot -> KatariValue.EnumValue(
+                typeId = snapshot.typeId,
+                entryName = snapshot.entryName,
+                ordinal = snapshot.ordinal,
+                properties = snapshot.properties.mapValues { (_, value) -> restoreValue(value, context) },
+            )
+            is EnumEntriesValueSnapshot -> KatariValue.EnumEntries(
+                typeId = snapshot.typeId,
+                entries = snapshot.entries.map { restoreValue(it, context) as KatariValue.EnumValue },
+            )
+            is EnumEntriesIteratorValueSnapshot -> KatariValue.HostObject(
+                typeId = KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID,
+                value = EnumEntriesIteratorValue(
+                    entries = snapshot.entries.map { restoreValue(it, context) as KatariValue.EnumValue },
+                    index = snapshot.index,
+                ),
+            )
             is ChoiceOptionValueSnapshot -> KatariValue.HostObject(
                 typeId = CHOICE_OPTION_TYPE_ID,
                 value = ChoiceOptionValue(

@@ -34,6 +34,7 @@ data class KatariBindings(
     val snapshotCodec: StateSnapshotCodec,
     val globals: Map<String, KatariValue>,
     val executionEnvironment: ExecutionEnvironment,
+    val enumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
 )
 
 class NarrativeBindingsBuilder {
@@ -44,6 +45,7 @@ class NarrativeBindingsBuilder {
     private val globals = linkedMapOf<String, KatariValue>()
     private val globalProperties = linkedMapOf<String, KatariGlobalPropertyDefinition>()
     private val hostTypes = mutableListOf<KatariType<out Any>>()
+    private val enumDefinitions = linkedMapOf<String, KatariEnumDefinition>()
 
     fun register(function: KatariFunctionDefinition): NarrativeBindingsBuilder = apply {
         functionDefinitions += function
@@ -247,6 +249,23 @@ class NarrativeBindingsBuilder {
         hostTypes += type
     }
 
+    fun <T : Enum<T>> registerEnum(
+        type: KatariType<T>,
+        values: List<T>,
+    ): NarrativeBindingsBuilder = apply {
+        registerHostType(type)
+        enumDefinitions[type.typeId] = KatariEnumDefinition(
+            typeId = type.typeId,
+            entries = values.map { value ->
+                KatariValue.EnumValue(
+                    typeId = type.typeId,
+                    entryName = value.name,
+                    ordinal = value.ordinal,
+                )
+            },
+        )
+    }
+
     fun <T : Any, S : ValueSnapshot> registerHostType(
         type: KatariType<T>,
         snapshotClass: KClass<S>,
@@ -287,8 +306,20 @@ class NarrativeBindingsBuilder {
         val environmentDefinitions = bridge?.definitions ?: emptyList()
         val environmentGlobals = bridge?.globals ?: emptyMap()
         val normalizedGlobals = environmentGlobals + globals
+        val baseDefinitions = environmentDefinitions + functionDefinitions
+        val enumCollectionDefinitions = NarrativeBuiltinFunctions.enumCollectionDefinitions()
+            .filterNot { enumDefinition ->
+                baseDefinitions.any { definition ->
+                    definition.id == enumDefinition.id &&
+                        definition.signature.valueParameters.firstOrNull()?.type ==
+                        enumDefinition.signature.valueParameters.firstOrNull()?.type
+                }
+            }
         return KatariBindings(
-            functionRegistry = KatariFunctionRegistry(environmentDefinitions + functionDefinitions, typeRegistry),
+            functionRegistry = KatariFunctionRegistry(
+                baseDefinitions + enumCollectionDefinitions,
+                typeRegistry,
+            ),
             propertyRegistry = KatariPropertyRegistry(globalProperties.values.toList()),
             snapshotCodec = StateSnapshotCodec(
                 valueCodecs = codecRegistry,
@@ -296,6 +327,7 @@ class NarrativeBindingsBuilder {
             ),
             globals = normalizedGlobals,
             executionEnvironment = executionEnvironment,
+            enumDefinitions = enumDefinitions,
         )
     }
 
@@ -307,6 +339,14 @@ class NarrativeBindingsBuilder {
             is Int -> KatariValue.Int32(value)
             is Double -> KatariValue.Float64(value)
             is String -> KatariValue.Text(value)
+            is Enum<*> -> {
+                val hostType = hostTypes.firstOrNull { it.kClass.isInstance(value) }
+                    ?: throw IllegalArgumentException(
+                        "No Katari enum type is registered for `${value::class.qualifiedName}`. " +
+                                "Register it with `registerEnum(...)` first."
+                    )
+                enumDefinitions.getValue(hostType.typeId).entry(value.name)
+            }
             else -> {
                 val hostType = hostTypes.firstOrNull { it.kClass.isInstance(value) }
                     ?: throw IllegalArgumentException(
@@ -813,6 +853,12 @@ private fun KatariValue.toRuntimeValue(interpreter: Interpreter): RuntimeValue {
         is KatariValue.Text -> StringValue(value, symbolTable)
         is KatariValue.Lambda -> throw IllegalArgumentException(
             "ExecutionEnvironment bridge cannot convert Narrative lambda `$id` to RuntimeValue."
+        )
+        is KatariValue.EnumValue -> throw IllegalArgumentException(
+            "ExecutionEnvironment bridge cannot convert Katari enum `$typeId.$entryName` to RuntimeValue automatically."
+        )
+        is KatariValue.EnumEntries -> throw IllegalArgumentException(
+            "ExecutionEnvironment bridge cannot convert Katari enum entries `$typeId.entries` to RuntimeValue automatically."
         )
 
         is KatariValue.HostObject -> {

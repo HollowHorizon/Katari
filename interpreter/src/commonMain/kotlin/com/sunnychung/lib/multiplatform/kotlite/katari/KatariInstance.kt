@@ -540,6 +540,28 @@ class KatariInstance(
                 is VariableExpression -> resolveVariableValue(state, task, expression.name)
                 is SlotExpression -> resolveSlotValue(state, task, expression.slot)
                 is LambdaLiteralExpression -> KatariValue.Lambda(expression.lambdaId)
+                is EnumEntryExpression -> program.enumDefinitions.getValue(expression.typeId).entry(expression.entryName)
+                is EnumEntriesExpression -> {
+                    val definition = program.enumDefinitions.getValue(expression.typeId)
+                    KatariValue.EnumEntries(typeId = expression.typeId, entries = definition.entries)
+                }
+                is EnumValueOfExpression -> {
+                    val entryName = evaluateExpression(state, task, expression.entryName) as? KatariValue.Text
+                        ?: throw IllegalArgumentException("Enum valueOf expects String argument")
+                    program.enumDefinitions.getValue(expression.typeId).entry(entryName.value)
+                }
+                is EnumPropertyExpression -> {
+                    val receiver = evaluateExpression(state, task, expression.receiver) as? KatariValue.EnumValue
+                        ?: throw IllegalArgumentException("Enum property `${expression.propertyName}` expects enum receiver")
+                    when (expression.propertyName) {
+                        "name" -> KatariValue.Text(receiver.entryName)
+                        "ordinal" -> KatariValue.Int32(receiver.ordinal)
+                        else -> receiver.properties[expression.propertyName]
+                            ?: throw IllegalArgumentException(
+                                "Enum `${receiver.typeId}` has no property `${expression.propertyName}`"
+                            )
+                    }
+                }
                 is UnaryExpression -> {
                     val operand = evaluateExpression(state, task, expression.operand)
                     when (expression.operator) {
@@ -779,6 +801,10 @@ class KatariInstance(
             is VariableExpression -> emptySet()
             is SlotExpression -> setOf(expression.slot)
             is LambdaLiteralExpression -> emptySet()
+            is EnumEntryExpression -> emptySet()
+            is EnumEntriesExpression -> emptySet()
+            is EnumValueOfExpression -> collectReferencedSlots(expression.entryName)
+            is EnumPropertyExpression -> collectReferencedSlots(expression.receiver)
             is UnaryExpression -> collectReferencedSlots(expression.operand)
             is BinaryExpression -> collectReferencedSlots(expression.left) + collectReferencedSlots(expression.right)
         }
@@ -937,6 +963,8 @@ class KatariInstance(
             is KatariValue.Float64 -> value.toString()
             is KatariValue.Text -> value
             is KatariValue.Lambda -> "Lambda($id)"
+            is KatariValue.EnumValue -> entryName
+            is KatariValue.EnumEntries -> entries.joinToString(prefix = "[", postfix = "]") { it.entryName }
             is KatariValue.HostObject -> value.toString()
         }
     }

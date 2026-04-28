@@ -20,5 +20,8 @@ fun KatariNarrativeProgram(
         executionEnvironment = bindings.executionEnvironment,
     )
     val declarations = bindings.executionEnvironment.getBuiltinFunctions(interpreter.symbolTable())
-    return KatariCompiler(inlineEnvironmentFunctions = declarations).compile(ast)
+    return KatariCompiler(
+        inlineEnvironmentFunctions = declarations,
+        importedEnumDefinitions = bindings.enumDefinitions,
+    ).compile(ast)
 }

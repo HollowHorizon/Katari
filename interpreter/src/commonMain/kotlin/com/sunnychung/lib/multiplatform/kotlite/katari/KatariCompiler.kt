@@ -6,8 +6,11 @@ import com.sunnychung.lib.multiplatform.kotlite.model.BinaryOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BreakNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BooleanNode
+import com.sunnychung.lib.multiplatform.kotlite.model.ClassDeclarationNode
+import com.sunnychung.lib.multiplatform.kotlite.model.ClassModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.ContinueNode
 import com.sunnychung.lib.multiplatform.kotlite.model.DoubleNode
+import com.sunnychung.lib.multiplatform.kotlite.model.EnumEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallArgumentNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
@@ -41,6 +44,7 @@ import kotlin.math.abs
 
 class KatariCompiler(
     private val inlineEnvironmentFunctions: List<FunctionDeclarationNode> = emptyList(),
+    private val importedEnumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
 ) {
 
     private var temporarySlotCounter: Int = 0
@@ -49,7 +53,9 @@ class KatariCompiler(
     private val loopContexts = ArrayDeque<LoopContext>()
     private val checkpointScopes = ArrayDeque<CheckpointScope>()
     private val userFunctions = mutableMapOf<String, MutableList<FunctionDeclarationNode>>()
+    private val enumDefinitions = linkedMapOf<String, KatariEnumDefinition>()
     private val lambdaBindings = ArrayDeque<MutableMap<String, String?>>()
+    private val enumTypeBindings = ArrayDeque<MutableMap<String, String?>>()
     private val frameIdStack = ArrayDeque<Int>()
 
     fun compile(script: ScriptNode): KatariProgram {
@@ -59,15 +65,23 @@ class KatariCompiler(
         loopContexts.clear()
         checkpointScopes.clear()
         userFunctions.clear()
+        enumDefinitions.clear()
+        enumDefinitions.putAll(importedEnumDefinitions)
         lambdaBindings.clear()
+        enumTypeBindings.clear()
         frameIdStack.clear()
 
+        collectTopLevelEnums(script)
         collectTopLevelUserFunctions(script)
 
         val instructions = mutableListOf<KatariInstruction>()
-        compileStatementsInScope(script.nodes.filterNot { it is FunctionDeclarationNode }, instructions, isFunctionBoundary = true)
+        compileStatementsInScope(
+            script.nodes.filterNot { it is FunctionDeclarationNode || it is ClassDeclarationNode && ClassModifier.enum in it.modifiers },
+            instructions,
+            isFunctionBoundary = true,
+        )
         instructions += EndInstruction(position = script.position)
-        return KatariProgram(instructions = instructions)
+        return KatariProgram(instructions = instructions, enumDefinitions = enumDefinitions)
     }
 
     private fun compileStatements(statements: List<ASTNode>, instructions: MutableList<KatariInstruction>) {
@@ -80,8 +94,10 @@ class KatariCompiler(
         isFunctionBoundary: Boolean = false,
         shadowedNames: Set<String> = emptySet(),
         lambdaParameterBindings: Map<String, String> = emptyMap(),
+        enumParameterBindings: Map<String, String> = emptyMap(),
     ) {
         lambdaBindings.addLast((shadowedNames.associateWith { null } + lambdaParameterBindings).toMutableMap())
+        enumTypeBindings.addLast((shadowedNames.associateWith { null } + enumParameterBindings).toMutableMap())
         checkpointScopes.addLast(CheckpointScope(isFunctionBoundary = isFunctionBoundary))
         if (isFunctionBoundary) {
             val newFrameId = nextFrameIdCounter++
@@ -118,6 +134,7 @@ class KatariCompiler(
                 frameIdStack.removeLast()
             }
             checkpointScopes.removeLast()
+            enumTypeBindings.removeLast()
             lambdaBindings.removeLast()
         }
     }
@@ -138,6 +155,9 @@ class KatariCompiler(
             is NarrativeChooseNode -> compileChoose(statement, instructions)
             is FunctionDeclarationNode -> throw UnsupportedOperationException(
                 "${statement.position} Local Katari function declarations are not supported. Declare functions at top-level only."
+            )
+            is ClassDeclarationNode -> throw UnsupportedOperationException(
+                "${statement.position} Katari compiler only supports top-level enum class declarations"
             )
             is UnaryOpNode -> compileUnaryStatement(statement, instructions)
             is StringLiteralNode -> instructions += CallFunctionInstruction(
@@ -170,6 +190,133 @@ class KatariCompiler(
                 "${function.position} Katari extension function `${function.name}` is declared more than once"
             }
             userFunctions.getOrPut(function.name) { mutableListOf() } += function
+        }
+    }
+
+    private fun collectTopLevelEnums(script: ScriptNode) {
+        script.nodes.filterIsInstance<ClassDeclarationNode>().forEach { declaration ->
+            require(ClassModifier.enum in declaration.modifiers) {
+                "${declaration.position} Katari compiler only supports enum class declarations"
+            }
+            require(!declaration.isInterface) {
+                "${declaration.position} Katari enum `${declaration.name}` cannot be an interface"
+            }
+            require(declaration.typeParameters.isEmpty()) {
+                "${declaration.position} Katari enum `${declaration.name}` cannot declare type parameters"
+            }
+            require(declaration.superInvocations.isNullOrEmpty()) {
+                "${declaration.position} Katari enum `${declaration.name}` cannot inherit classes or interfaces"
+            }
+            require(declaration.declarations.isEmpty()) {
+                "${declaration.position} Katari enum `${declaration.name}` cannot declare members inside enum body"
+            }
+            require(declaration.name !in enumDefinitions) {
+                "${declaration.position} Katari enum `${declaration.name}` is declared more than once"
+            }
+            enumDefinitions[declaration.name] = declaration.toKatariEnumDefinition()
+        }
+    }
+
+    private fun ClassDeclarationNode.toKatariEnumDefinition(): KatariEnumDefinition {
+        val constructorParameters = primaryConstructor?.parameters.orEmpty().map { it.parameter }
+        val entries = enumEntries.mapIndexed { index, entry ->
+            val properties = resolveEnumEntryProperties(
+                enumName = name,
+                constructorParameters = constructorParameters,
+                entry = entry,
+            )
+            KatariValue.EnumValue(
+                typeId = name,
+                entryName = entry.name,
+                ordinal = index,
+                properties = properties,
+            )
+        }
+        return KatariEnumDefinition(typeId = name, entries = entries)
+    }
+
+    private fun resolveEnumEntryProperties(
+        enumName: String,
+        constructorParameters: List<FunctionValueParameterNode>,
+        entry: EnumEntryNode,
+    ): Map<String, KatariValue> {
+        require(!entry.arguments.hasPositionalArgumentAfterNamedArgument()) {
+            "${entry.position} Positional arguments cannot follow named arguments"
+        }
+        val positionalArguments = entry.arguments.takeWhile { it.name == null }.toMutableList()
+        val namedArguments = entry.arguments.drop(positionalArguments.size)
+        val namedByName = linkedMapOf<String, FunctionCallArgumentNode>()
+        namedArguments.forEach { argument ->
+            val name = argument.name ?: return@forEach
+            require(namedByName.put(name, argument) == null) {
+                "${argument.position} Argument `$name` is provided more than once"
+            }
+        }
+        val properties = linkedMapOf<String, KatariValue>()
+        constructorParameters.forEach { parameter ->
+            val argument = if (positionalArguments.isNotEmpty()) {
+                positionalArguments.removeAt(0)
+            } else {
+                namedByName.remove(parameter.name)
+            }
+            val valueNode = argument?.value ?: parameter.defaultValue
+                ?: throw IllegalArgumentException(
+                    "${entry.position} Missing enum constructor argument `${parameter.name}` for `$enumName.${entry.name}`"
+                )
+            properties[parameter.name] = evaluateConstantEnumValue(valueNode)
+        }
+        require(positionalArguments.isEmpty()) {
+            "${entry.position} Too many positional enum constructor arguments for `$enumName.${entry.name}`"
+        }
+        require(namedByName.isEmpty()) {
+            "${entry.position} Unknown enum constructor argument `${namedByName.keys.first()}` for `$enumName.${entry.name}`"
+        }
+        return properties
+    }
+
+    private fun evaluateConstantEnumValue(node: ASTNode): KatariValue {
+        return when (node) {
+            is BooleanNode -> KatariValue.Bool(node.value)
+            is IntegerNode -> KatariValue.Int32(node.value)
+            is DoubleNode -> KatariValue.Float64(node.value)
+            NullNode -> KatariValue.Null
+            is StringLiteralNode -> KatariValue.Text(node.content)
+            is StringNode -> KatariValue.Text(
+                node.nodes.joinToString("") { part ->
+                    val value = evaluateConstantEnumValue(part)
+                    when (value) {
+                        KatariValue.Null -> "null"
+                        KatariValue.DefaultArgument -> "<default>"
+                        is KatariValue.Bool -> value.value.toString()
+                        is KatariValue.Int32 -> value.value.toString()
+                        is KatariValue.Float64 -> value.value.toString()
+                        is KatariValue.Text -> value.value
+                        is KatariValue.Lambda -> "Lambda(${value.id})"
+                        is KatariValue.EnumValue -> value.entryName
+                        is KatariValue.EnumEntries -> value.entries.joinToString(prefix = "[", postfix = "]") { it.entryName }
+                        is KatariValue.HostObject -> value.value.toString()
+                    }
+                }
+            )
+            is UnaryOpNode -> {
+                val operand = evaluateConstantEnumValue(
+                    node.node ?: throw IllegalArgumentException("${node.position} Enum constructor unary expression requires operand")
+                )
+                when (node.operator) {
+                    "+" -> operand
+                    "-" -> when (operand) {
+                        is KatariValue.Int32 -> KatariValue.Int32(-operand.value)
+                        is KatariValue.Float64 -> KatariValue.Float64(-operand.value)
+                        else -> throw IllegalArgumentException("${node.position} Enum constructor unary `-` expects numeric value")
+                    }
+                    "!" -> KatariValue.Bool(!(operand as? KatariValue.Bool
+                        ?: throw IllegalArgumentException("${node.position} Enum constructor unary `!` expects Boolean")).value)
+                    else -> throw IllegalArgumentException("${node.position} Unsupported enum constructor unary operator `${node.operator}`")
+                }
+            }
+            else -> throw IllegalArgumentException(
+                "${node.position} Katari enum constructor arguments must be compile-time constants"
+            )
         }
     }
 
@@ -352,6 +499,7 @@ class KatariCompiler(
         val initialValue = node.initialValue
             ?: throw UnsupportedOperationException("Katari property `${node.name}` requires an initializer")
         val targetName = resolveVariableName(node.name)
+        bindVariableEnumType(node.name, node.declaredType?.name?.takeIf { it in enumDefinitions })
         when {
             initialValue is LambdaLiteralNode -> {
                 val lambdaId = registerLambda(initialValue)
@@ -364,7 +512,10 @@ class KatariCompiler(
                 )
                 return
             }
-            else -> bindVariableLambda(node.name, null)
+            else -> {
+                bindVariableLambda(node.name, null)
+                inferEnumTypeFromExpression(initialValue)?.let { bindVariableEnumType(node.name, it) }
+            }
         }
         if (initialValue is FunctionCallNode) {
             val invocation = resolveInlineCapableFunctionInvocation(initialValue, instructions)
@@ -588,9 +739,12 @@ class KatariCompiler(
         val valueName = "__narrative_for_value_${nextTemporarySlot()}"
         val loopVariableNames = node.variables.map { resolveVariableName(it.name) }
         loopVariableNames.forEach { bindVariableLambda(it, null) }
+        val subjectExpression = compileExpression(node.subject, instructions)
+        val loopEnumType = (subjectExpression as? EnumEntriesExpression)?.typeId
+        loopVariableNames.forEach { bindVariableEnumType(it, loopEnumType) }
         instructions += CallFunctionInstruction(
             functionId = "iterator",
-            arguments = listOf(compileExpression(node.subject, instructions)),
+            arguments = listOf(subjectExpression),
             resultTarget = ResultTarget.Variable(iteratorName, declaresLocal = true),
             position = node.position,
         )
@@ -645,6 +799,7 @@ class KatariCompiler(
                 position = instructions[breakIndex].position,
             )
         }
+        loopVariableNames.forEach { bindVariableEnumType(it, null) }
         instructions += RemoveVariablesInstruction(
             names = loopVariableNames + valueName + iteratorName,
             position = node.position,
@@ -812,6 +967,7 @@ class KatariCompiler(
                 isFunctionBoundary = true,
                 shadowedNames = parameterNames.toSet() + setOfNotNull(receiverExpression?.let { "this" }),
                 lambdaParameterBindings = lambdaParameterBindings,
+                enumParameterBindings = declaration.enumParameterBindings(receiverExpression != null),
             )
             trailingReturnValue?.let {
                 compileExpressionIntoTarget(
@@ -833,15 +989,22 @@ class KatariCompiler(
                 isFunctionBoundary = true,
                 shadowedNames = parameterNames.toSet() + setOfNotNull(receiverExpression?.let { "this" }),
                 lambdaParameterBindings = lambdaParameterBindings,
+                enumParameterBindings = declaration.enumParameterBindings(receiverExpression != null),
             )
             validateUserFunctionBodyAsExpression(body, functionName)
             val last = body.statements.last()
-            when (last) {
-                is ReturnNode -> {
-                    val returnValue = last.value ?: NullNode
-                    compileExpressionIntoTarget(returnValue, ResultTarget.Variable(returnName, declaresLocal = true), instructions)
+            withExpressionBindings(
+                shadowedNames = parameterNames.toSet() + setOfNotNull(receiverExpression?.let { "this" }),
+                lambdaParameterBindings = lambdaParameterBindings,
+                enumParameterBindings = declaration.enumParameterBindings(receiverExpression != null),
+            ) {
+                when (last) {
+                    is ReturnNode -> {
+                        val returnValue = last.value ?: NullNode
+                        compileExpressionIntoTarget(returnValue, ResultTarget.Variable(returnName, declaresLocal = true), instructions)
+                    }
+                    else -> compileExpressionIntoTarget(last, ResultTarget.Variable(returnName, declaresLocal = true), instructions)
                 }
-                else -> compileExpressionIntoTarget(last, ResultTarget.Variable(returnName, declaresLocal = true), instructions)
             }
             instructions += ExitCallFrameInstruction(
                 returnExpression = VariableExpression(returnName, position = last.position),
@@ -885,6 +1048,22 @@ class KatariCompiler(
 
     private fun resolveVariableName(name: String): String {
         return name
+    }
+
+    private fun withExpressionBindings(
+        shadowedNames: Set<String>,
+        lambdaParameterBindings: Map<String, String>,
+        enumParameterBindings: Map<String, String>,
+        block: () -> Unit,
+    ) {
+        lambdaBindings.addLast((shadowedNames.associateWith { null } + lambdaParameterBindings).toMutableMap())
+        enumTypeBindings.addLast((shadowedNames.associateWith { null } + enumParameterBindings).toMutableMap())
+        try {
+            block()
+        } finally {
+            enumTypeBindings.removeLast()
+            lambdaBindings.removeLast()
+        }
     }
 
     private fun compileInlineCapableFunctionCall(
@@ -962,6 +1141,7 @@ class KatariCompiler(
             }
             is IfNode -> compileIfExpression(expression, instructions)
             is FunctionCallNode -> {
+                compileEnumCompanionCall(expression, instructions)?.let { return it }
                 val invocation = resolveInlineCapableFunctionInvocation(expression, instructions)
                 if (invocation != null) {
                     val slot = nextTemporarySlot()
@@ -983,12 +1163,14 @@ class KatariCompiler(
                 )
                 SlotExpression(slot, position = expression.position)
             }
-            is NavigationNode -> compileExternalExpressionCall(
-                functionId = expression.member.name,
-                arguments = listOf(compileExpression(expression.subject, instructions)),
-                position = expression.position,
-                instructions = instructions,
-            )
+            is NavigationNode -> compileEnumNavigationExpression(expression, instructions)
+                ?: compileEnumValuePropertyExpression(expression, instructions)
+                ?: compileExternalExpressionCall(
+                    functionId = expression.member.name,
+                    arguments = listOf(compileExpression(expression.subject, instructions)),
+                    position = expression.position,
+                    instructions = instructions,
+                )
             is IndexOpNode -> compileExternalExpressionCall(
                 functionId = "get",
                 arguments = listOf(compileExpression(expression.subject, instructions)) +
@@ -1089,6 +1271,70 @@ class KatariCompiler(
             position = position,
         )
         return SlotExpression(slot, position = position)
+    }
+
+    private fun compileEnumNavigationExpression(
+        node: NavigationNode,
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression? {
+        val subject = node.subject
+        if (subject is VariableReferenceNode) {
+            val enumDefinition = enumDefinitions[subject.variableName] ?: return null
+            return when (node.member.name) {
+                "entries" -> EnumEntriesExpression(typeId = enumDefinition.typeId, position = node.position)
+                else -> if (enumDefinition.entries.any { it.entryName == node.member.name }) {
+                    EnumEntryExpression(
+                        typeId = enumDefinition.typeId,
+                        entryName = node.member.name,
+                        position = node.position,
+                    )
+                } else {
+                    throw IllegalArgumentException(
+                        "${node.position} Enum `${enumDefinition.typeId}` has no entry or property `${node.member.name}`"
+                    )
+                }
+            }
+        }
+        return null
+    }
+
+    private fun compileEnumValuePropertyExpression(
+        node: NavigationNode,
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression? {
+        val subjectExpression = when (val subject = node.subject) {
+            is NavigationNode -> compileEnumNavigationExpression(subject, instructions)
+            is FunctionCallNode -> compileEnumCompanionCall(subject, instructions)
+            is VariableReferenceNode -> resolveEnumTypeBinding(subject.variableName)?.let {
+                VariableExpression(resolveVariableName(subject.variableName), position = subject.position)
+            }
+            else -> null
+        } ?: return null
+        return EnumPropertyExpression(
+            receiver = subjectExpression,
+            propertyName = node.member.name,
+            position = node.position,
+        )
+    }
+
+    private fun compileEnumCompanionCall(
+        node: FunctionCallNode,
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression? {
+        val function = node.function as? NavigationNode ?: return null
+        val enumName = (function.subject as? VariableReferenceNode)?.variableName ?: return null
+        val enumDefinition = enumDefinitions[enumName] ?: return null
+        if (function.member.name != "valueOf") {
+            return null
+        }
+        require(node.arguments.size == 1 && node.arguments.single().name == null) {
+            "${node.position} Enum `${enumDefinition.typeId}.valueOf` expects a single positional String argument"
+        }
+        return EnumValueOfExpression(
+            typeId = enumDefinition.typeId,
+            entryName = compileExpression(node.arguments.single().value, instructions),
+            position = node.position,
+        )
     }
 
     private fun compileArgumentExpression(
@@ -1203,6 +1449,12 @@ class KatariCompiler(
         currentScope[name] = lambdaId
     }
 
+    private fun bindVariableEnumType(name: String, typeId: String?) {
+        val currentScope = enumTypeBindings.lastOrNull()
+            ?: throw IllegalStateException("Enum binding scope is not initialized")
+        currentScope[name] = typeId
+    }
+
     private fun resolveLambdaBinding(name: String): String? {
         lambdaBindings.toList().asReversed().forEach { scope ->
             if (name in scope) {
@@ -1210,6 +1462,47 @@ class KatariCompiler(
             }
         }
         return null
+    }
+
+    private fun resolveEnumTypeBinding(name: String): String? {
+        enumTypeBindings.toList().asReversed().forEach { scope ->
+            if (name in scope) {
+                return scope[name]
+            }
+        }
+        return null
+    }
+
+    private fun inferEnumTypeFromExpression(expression: ASTNode): String? {
+        return when (expression) {
+            is NavigationNode -> {
+                val subject = expression.subject as? VariableReferenceNode ?: return null
+                enumDefinitions[subject.variableName]
+                    ?.takeIf { definition -> definition.entries.any { it.entryName == expression.member.name } }
+                    ?.typeId
+            }
+            is FunctionCallNode -> {
+                val function = expression.function as? NavigationNode ?: return null
+                val subject = function.subject as? VariableReferenceNode ?: return null
+                enumDefinitions[subject.variableName]
+                    ?.takeIf { function.member.name == "valueOf" }
+                    ?.typeId
+            }
+            else -> null
+        }
+    }
+
+    private fun FunctionDeclarationNode.enumParameterBindings(hasReceiver: Boolean): Map<String, String> {
+        return buildMap {
+            if (hasReceiver) {
+                receiver?.name?.takeIf { it in enumDefinitions }?.let { put("this", it) }
+            }
+            valueParameters.forEach { parameter ->
+                parameter.declaredType?.name?.takeIf { it in enumDefinitions }?.let {
+                    put(parameter.name, it)
+                }
+            }
+        }
     }
 
     private fun resolveCallableDeclaration(name: String, requiresReceiver: Boolean? = null): FunctionDeclarationNode? {

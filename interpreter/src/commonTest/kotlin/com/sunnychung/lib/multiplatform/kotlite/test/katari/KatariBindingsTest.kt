@@ -559,6 +559,8 @@ class NarrativeBindingsTest {
                             is KatariValue.Float64 -> value.value.toString()
                             is KatariValue.Text -> value.value
                             is KatariValue.Lambda -> "Lambda(${value.id})"
+                            is KatariValue.EnumValue -> value.entryName
+                            is KatariValue.EnumEntries -> value.entries.joinToString(prefix = "[", postfix = "]") { it.entryName }
                             is KatariValue.HostObject -> (value.value as RuntimeValue).convertToString()
                         }
                         KatariValue.Null
@@ -615,6 +617,8 @@ class NarrativeBindingsTest {
                             is KatariValue.Float64 -> value.value.toString()
                             is KatariValue.Text -> value.value
                             is KatariValue.Lambda -> "Lambda(${value.id})"
+                            is KatariValue.EnumValue -> value.entryName
+                            is KatariValue.EnumEntries -> value.entries.joinToString(prefix = "[", postfix = "]") { it.entryName }
                             is KatariValue.HostObject -> (value.value as RuntimeValue).convertToString()
                         }
                         KatariValue.Null
@@ -710,6 +714,8 @@ class NarrativeBindingsTest {
                             is KatariValue.Float64 -> value.value.toString()
                             is KatariValue.Text -> value.value
                             is KatariValue.Lambda -> "Lambda(${value.id})"
+                            is KatariValue.EnumValue -> value.entryName
+                            is KatariValue.EnumEntries -> value.entries.joinToString(prefix = "[", postfix = "]") { it.entryName }
                             is KatariValue.HostObject -> (value.value as RuntimeValue).convertToString()
                         }
                         KatariValue.Null
@@ -1013,6 +1019,112 @@ class NarrativeBindingsTest {
         assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("default:named", "explicit:mixed"), events)
     }
+
+    @Test
+    fun katariCompilerSupportsNativeEnumEntriesValueOfAndProperties() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(KatariTypes.Any.asValueParameter("value")),
+            ) { _, args, _ ->
+                val value = args.single()
+                events += when (value) {
+                    is KatariValue.EnumValue -> value.entryName
+                    is KatariValue.Text -> value.value
+                    is KatariValue.Int32 -> value.value.toString()
+                    else -> value.toString()
+                }
+                KatariValue.Null
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    enum class Mood(val label: String, val score: Int = 2) {
+                        Happy("Happy", 5),
+                        Sad(label = "Sad"),
+                    }
+
+                    fun describe(mood: Mood): String {
+                        return "${'$'}{mood.label}:${'$'}{mood.score}"
+                    }
+
+                    capture(Mood.Happy)
+                    capture(Mood.valueOf("Sad"))
+                    capture(Mood.Happy.label)
+                    capture(Mood.valueOf("Sad").score)
+                    capture(describe(Mood.Happy))
+                    var total = 0
+                    for (mood in Mood.entries) {
+                        total += mood.score
+                    }
+                    capture(total)
+                """.trimIndent(),
+                bindings = bindings,
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            propertyRegistry = bindings.propertyRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("Happy", "Sad", "Happy", "2", "Happy:5", "7"), events)
+    }
+
+    @Test
+    fun katariBindingsCanImportRegisteredEnumDefinitions() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            registerEnum(BindingMood::class.toKatari("BindingMood"), BindingMood.entries)
+            global("initialMood", BindingMood.Angry)
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(KatariParameterType("BindingMood").asValueParameter("value")),
+            ) { _, args, _ ->
+                events += (args.single() as KatariValue.EnumValue).entryName
+                KatariValue.Null
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    capture(BindingMood.Calm)
+                    capture(BindingMood.valueOf("Angry"))
+                    capture(initialMood)
+                """.trimIndent(),
+                bindings = bindings,
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            functionRegistry = bindings.functionRegistry,
+            propertyRegistry = bindings.propertyRegistry,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("Calm", "Angry", "Angry"), events)
+    }
 }
 
 @Serializable
@@ -1028,5 +1140,10 @@ data class BindingNarrativeObject(val name: String)
 data class BindingActor(var ready: Boolean = false)
 
 data class PromptFlagResponse(val enabled: Boolean) : FunctionResponse
+
+enum class BindingMood {
+    Calm,
+    Angry,
+}
 
 
