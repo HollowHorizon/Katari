@@ -45,6 +45,8 @@ import kotlin.math.abs
 class KatariCompiler(
     private val inlineEnvironmentFunctions: List<FunctionDeclarationNode> = emptyList(),
     private val importedEnumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
+    private val nameAliases: Map<String, String> = emptyMap(),
+    private val scriptNamespaces: Map<String, Set<String>> = emptyMap(),
 ) {
 
     private var temporarySlotCounter: Int = 0
@@ -892,7 +894,7 @@ class KatariCompiler(
         }
         return when (val function = node.function) {
             is VariableReferenceNode -> CallFunctionInstruction(
-                functionId = function.variableName,
+                functionId = resolveCallableName(function.variableName),
                 arguments = arguments,
                 argumentNames = argumentNames,
                 resultTarget = resultTarget,
@@ -900,7 +902,7 @@ class KatariCompiler(
             )
             is NavigationNode -> {
                 CallFunctionInstruction(
-                    functionId = function.member.name,
+                    functionId = resolveNavigationCallableName(function) ?: resolveCallableName(function.member.name),
                     arguments = listOf(compileExpression(function.subject, instructions)) + arguments,
                     argumentNames = listOf(null) + argumentNames,
                     resultTarget = resultTarget,
@@ -1050,6 +1052,24 @@ class KatariCompiler(
         return name
     }
 
+    private fun resolveCallableName(name: String): String {
+        return nameAliases[name] ?: name
+    }
+
+    private fun resolveTypeName(name: String): String {
+        return nameAliases[name] ?: name
+    }
+
+    private fun resolveNavigationCallableName(function: NavigationNode): String? {
+        val namespace = (function.subject as? VariableReferenceNode)?.variableName ?: return null
+        val functions = scriptNamespaces[namespace] ?: return null
+        return if (function.member.name in functions) {
+            "$namespace.${function.member.name}"
+        } else {
+            null
+        }
+    }
+
     private fun withExpressionBindings(
         shadowedNames: Set<String>,
         lambdaParameterBindings: Map<String, String>,
@@ -1096,7 +1116,7 @@ class KatariCompiler(
     ): ResolvedUserFunctionInvocation? {
         return when (val function = node.function) {
             is VariableReferenceNode -> {
-                val declaration = resolveCallableDeclaration(function.variableName, requiresReceiver = false) ?: return null
+                val declaration = resolveCallableDeclaration(resolveCallableName(function.variableName), requiresReceiver = false) ?: return null
                 ResolvedUserFunctionInvocation(
                     declaration = declaration,
                     receiverExpression = null,
@@ -1109,7 +1129,20 @@ class KatariCompiler(
                 )
             }
             is NavigationNode -> {
-                val declaration = resolveCallableDeclaration(function.member.name, requiresReceiver = true) ?: return null
+                resolveNavigationCallableName(function)?.let { namespacedName ->
+                    val declaration = resolveCallableDeclaration(namespacedName, requiresReceiver = false) ?: return null
+                    return ResolvedUserFunctionInvocation(
+                        declaration = declaration,
+                        receiverExpression = null,
+                        argumentExpressions = compileCallArguments(
+                            callPosition = node.position,
+                            callArguments = node.arguments,
+                            parameters = declaration.valueParameters,
+                            instructions = instructions,
+                        ),
+                    )
+                }
+                val declaration = resolveCallableDeclaration(resolveCallableName(function.member.name), requiresReceiver = true) ?: return null
                 ResolvedUserFunctionInvocation(
                     declaration = declaration,
                     receiverExpression = compileExpression(function.subject, instructions),
@@ -1279,7 +1312,7 @@ class KatariCompiler(
     ): KatariExpression? {
         val subject = node.subject
         if (subject is VariableReferenceNode) {
-            val enumDefinition = enumDefinitions[subject.variableName] ?: return null
+            val enumDefinition = enumDefinitions[resolveTypeName(subject.variableName)] ?: return null
             return when (node.member.name) {
                 "entries" -> EnumEntriesExpression(typeId = enumDefinition.typeId, position = node.position)
                 else -> if (enumDefinition.entries.any { it.entryName == node.member.name }) {
@@ -1322,7 +1355,7 @@ class KatariCompiler(
         instructions: MutableList<KatariInstruction>,
     ): KatariExpression? {
         val function = node.function as? NavigationNode ?: return null
-        val enumName = (function.subject as? VariableReferenceNode)?.variableName ?: return null
+        val enumName = (function.subject as? VariableReferenceNode)?.variableName?.let { resolveTypeName(it) } ?: return null
         val enumDefinition = enumDefinitions[enumName] ?: return null
         if (function.member.name != "valueOf") {
             return null
@@ -1477,14 +1510,14 @@ class KatariCompiler(
         return when (expression) {
             is NavigationNode -> {
                 val subject = expression.subject as? VariableReferenceNode ?: return null
-                enumDefinitions[subject.variableName]
+                enumDefinitions[resolveTypeName(subject.variableName)]
                     ?.takeIf { definition -> definition.entries.any { it.entryName == expression.member.name } }
                     ?.typeId
             }
             is FunctionCallNode -> {
                 val function = expression.function as? NavigationNode ?: return null
                 val subject = function.subject as? VariableReferenceNode ?: return null
-                enumDefinitions[subject.variableName]
+                enumDefinitions[resolveTypeName(subject.variableName)]
                     ?.takeIf { function.member.name == "valueOf" }
                     ?.typeId
             }
@@ -1495,10 +1528,10 @@ class KatariCompiler(
     private fun FunctionDeclarationNode.enumParameterBindings(hasReceiver: Boolean): Map<String, String> {
         return buildMap {
             if (hasReceiver) {
-                receiver?.name?.takeIf { it in enumDefinitions }?.let { put("this", it) }
+                receiver?.name?.let { resolveTypeName(it) }?.takeIf { it in enumDefinitions }?.let { put("this", it) }
             }
             valueParameters.forEach { parameter ->
-                parameter.declaredType?.name?.takeIf { it in enumDefinitions }?.let {
+                parameter.declaredType?.name?.let { resolveTypeName(it) }?.takeIf { it in enumDefinitions }?.let {
                     put(parameter.name, it)
                 }
             }
@@ -1522,7 +1555,7 @@ class KatariCompiler(
         return when (val function = node.function) {
             is VariableReferenceNode -> {
                 val declaration = inlineEnvironmentFunctions.firstOrNull {
-                    it.name == function.variableName &&
+                    it.name == resolveCallableName(function.variableName) &&
                         it.receiver == null &&
                         FunctionModifier.inline in it.modifiers &&
                         it.body != null &&
@@ -1541,7 +1574,7 @@ class KatariCompiler(
             }
             is NavigationNode -> {
                 val declaration = inlineEnvironmentFunctions.firstOrNull {
-                    it.name == function.member.name &&
+                    it.name == resolveCallableName(function.member.name) &&
                         it.receiver != null &&
                         FunctionModifier.inline in it.modifiers &&
                         it.body != null &&

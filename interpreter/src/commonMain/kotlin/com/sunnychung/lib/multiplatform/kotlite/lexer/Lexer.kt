@@ -14,7 +14,12 @@ object BuiltinFilename {
     val GLOBAL = "<Global>"
 }
 
-open class Lexer(val filename: String, val code: String, val isParseComment: Boolean = false) {
+open class Lexer(
+    val filename: String,
+    val code: String,
+    val isParseComment: Boolean = false,
+    val isParseSingleQuotedString: Boolean = false,
+) {
     private var pos: Int = 0
     private var lineNum = 1
     private var col = 1
@@ -117,6 +122,20 @@ open class Lexer(val filename: String, val code: String, val isParseComment: Boo
             advanceChar()
         }
         backward()
+        return sb.toString()
+    }
+
+    internal fun readSingleQuotedLiteral(): String {
+        val sb = StringBuilder()
+        while (currentChar() != null && currentChar() != '\'') {
+            sb.append(
+                if (currentChar() == '\\') {
+                    readChar(isDecodeSurrogatePair = false).also { advanceChar() }
+                } else {
+                    currentChar().also { advanceChar() }.toString()
+                }
+            )
+        }
         return sb.toString()
     }
 
@@ -331,6 +350,17 @@ open class Lexer(val filename: String, val code: String, val isParseComment: Boo
                         c == '\'' -> {
                             val position = makeSourcePosition()
                             advanceChar()
+                            if (isParseSingleQuotedString) {
+                                val literal = readSingleQuotedLiteral()
+                                if (currentChar() != '\'') {
+                                    throw RuntimeException("Invalid single quoted literal")
+                                }
+                                advanceChar()
+                                if (literal.length == 1) {
+                                    return Token(TokenType.Char, literal.first(), position, makeSourcePosition())
+                                }
+                                return Token(TokenType.StringLiteral, literal, position, makeSourcePosition())
+                            }
                             val char = readChar(isDecodeSurrogatePair = false).first()
                             if (advanceChar() != '\'') {
                                 throw RuntimeException("Invalid char literal")

@@ -35,6 +35,7 @@ data class KatariBindings(
     val globals: Map<String, KatariValue>,
     val executionEnvironment: ExecutionEnvironment,
     val enumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
+    val importAliases: Map<String, String> = emptyMap(),
 )
 
 class NarrativeBindingsBuilder {
@@ -46,6 +47,8 @@ class NarrativeBindingsBuilder {
     private val globalProperties = linkedMapOf<String, KatariGlobalPropertyDefinition>()
     private val hostTypes = mutableListOf<KatariType<out Any>>()
     private val enumDefinitions = linkedMapOf<String, KatariEnumDefinition>()
+    private val importAliases = linkedMapOf<String, String>()
+    private val importWildcards = mutableListOf<String>()
 
     fun register(function: KatariFunctionDefinition): NarrativeBindingsBuilder = apply {
         functionDefinitions += function
@@ -57,6 +60,17 @@ class NarrativeBindingsBuilder {
 
     fun install(module: LibraryModule): NarrativeBindingsBuilder = apply {
         executionEnvironment.install(module)
+    }
+
+    fun import(path: String, alias: String? = null): NarrativeBindingsBuilder = apply {
+        require(path.isNotBlank()) { "Katari binding import path cannot be blank" }
+        val importedName = path.substringAfterLast('.')
+        importAliases[alias ?: importedName] = path
+    }
+
+    fun importWildcard(path: String): NarrativeBindingsBuilder = apply {
+        require(path.isNotBlank()) { "Katari binding wildcard import path cannot be blank" }
+        importWildcards += path.removeSuffix(".*")
     }
 
     fun registerKotliteFunction(function: CustomFunctionDefinition): NarrativeBindingsBuilder = apply {
@@ -305,7 +319,15 @@ class NarrativeBindingsBuilder {
         val typeRegistry = hostTypeRegistry.mergedWith(bridge?.typeRegistry ?: KatariTypeRegistry.Empty)
         val environmentDefinitions = bridge?.definitions ?: emptyList()
         val environmentGlobals = bridge?.globals ?: emptyMap()
-        val normalizedGlobals = environmentGlobals + globals
+        val baseGlobals = environmentGlobals + globals
+        val importGlobals = importAliases.mapNotNull { (alias, target) ->
+            baseGlobals[target]?.let { alias to it } ?: baseGlobals[target.substringAfterLast('.')]?.let { alias to it }
+        }.toMap() + importWildcards.flatMap { prefix ->
+            baseGlobals.mapNotNull { (name, value) ->
+                name.removePrefix("$prefix.").takeIf { it != name && it.isNotBlank() }?.let { it to value }
+            }
+        }
+        val normalizedGlobals = baseGlobals + importGlobals
         val baseDefinitions = environmentDefinitions + functionDefinitions
         val enumCollectionDefinitions = NarrativeBuiltinFunctions.enumCollectionDefinitions()
             .filterNot { enumDefinition ->
@@ -328,6 +350,7 @@ class NarrativeBindingsBuilder {
             globals = normalizedGlobals,
             executionEnvironment = executionEnvironment,
             enumDefinitions = enumDefinitions,
+            importAliases = importAliases,
         )
     }
 

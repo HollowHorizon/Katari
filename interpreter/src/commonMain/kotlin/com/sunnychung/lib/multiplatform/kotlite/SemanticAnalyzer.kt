@@ -58,6 +58,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.IfNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IndexOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.InfixFunctionCallNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IntegerNode
+import com.sunnychung.lib.multiplatform.kotlite.model.KatariImportNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LabelNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LongNode
@@ -355,6 +356,7 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
             is NarrativeJumpNode -> {}
             is NarrativeChooseNode -> {}
             is NarrativeChooseEntryNode -> {}
+            is KatariImportNode -> {}
         }
     }
 
@@ -2661,6 +2663,7 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
             is NarrativeJumpNode -> typeRegistry["Unit"]!!
             is NarrativeChooseNode -> typeRegistry["Unit"]!!
             is NarrativeChooseEntryNode -> typeRegistry["Unit"]!!
+            is KatariImportNode -> typeRegistry["Unit"]!!
     }
 
     fun BinaryOpNode.type(modifier: ResolveTypeModifier = ResolveTypeModifier()): TypeNode {

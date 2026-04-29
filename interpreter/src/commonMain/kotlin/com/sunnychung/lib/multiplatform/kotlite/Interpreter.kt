@@ -64,6 +64,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.IndexOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.InfixFunctionCallNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
 import com.sunnychung.lib.multiplatform.kotlite.model.IntegerNode
+import com.sunnychung.lib.multiplatform.kotlite.model.KatariImportNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LabelNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LambdaValue
@@ -200,6 +201,7 @@ open class Interpreter(val rootNode: ASTNode, val executionEnvironment: Executio
             is NarrativeJumpNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
             is NarrativeChooseNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
             is NarrativeChooseEntryNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
+            is KatariImportNode -> throw UnsupportedOperationException("Katari import node must be resolved before interpretation")
         }
     }
 

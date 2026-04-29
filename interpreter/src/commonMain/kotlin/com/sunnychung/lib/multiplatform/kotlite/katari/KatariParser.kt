@@ -1,6 +1,7 @@
 package com.sunnychung.lib.multiplatform.kotlite.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.Parser
+import com.sunnychung.lib.multiplatform.kotlite.error.UnexpectedTokenException
 import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
 import com.sunnychung.lib.multiplatform.kotlite.model.ASTNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BinaryOpNode
@@ -8,12 +9,17 @@ import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ElvisOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionBodyFormat
 import com.sunnychung.lib.multiplatform.kotlite.model.InfixFunctionCallNode
+import com.sunnychung.lib.multiplatform.kotlite.model.KatariImportNode
+import com.sunnychung.lib.multiplatform.kotlite.model.KatariQualifiedImportNode
+import com.sunnychung.lib.multiplatform.kotlite.model.KatariScriptImportNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ScopeType
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
 import com.sunnychung.lib.multiplatform.kotlite.model.TokenType
 import com.sunnychung.lib.multiplatform.kotlite.model.UnaryOpNode
 
@@ -50,10 +56,78 @@ class KatariParser(
                 }
                 "checkpoint" -> narrativeCheckpoint()
                 "jump" -> narrativeJump()
+                "import" -> katariImport()
+                "load" -> katariLoad()
                 else -> null
             }
         }
         return null
+    }
+
+    private fun katariImport(): KatariImportNode {
+        val token = eat(TokenType.Identifier, "import")
+        repeatedNL()
+        if (isCurrentToken(TokenType.Identifier, "katari")) {
+            eat(TokenType.Identifier, "katari")
+            repeatedNL()
+            val path = stringImportPath()
+            val alias = optionalAlias()
+            return KatariScriptImportNode(position = token.position, path = path, alias = alias)
+        }
+        val path = mutableListOf(eat(TokenType.Identifier).value as String)
+        var isWildcard = false
+        while (isCurrentTokenExcludingNL(TokenType.Operator, ".")) {
+            repeatedNL()
+            eat(TokenType.Operator, ".")
+            repeatedNL()
+            if (isCurrentToken(TokenType.Operator, "*")) {
+                eat(TokenType.Operator, "*")
+                isWildcard = true
+                break
+            }
+            path += eat(TokenType.Identifier).value as String
+        }
+        val alias = optionalAlias()
+        return KatariQualifiedImportNode(position = token.position, path = path, alias = alias, isWildcard = isWildcard)
+    }
+
+    private fun katariLoad(): KatariScriptImportNode {
+        val token = eat(TokenType.Identifier, "load")
+        repeatedNL()
+        eat(TokenType.Identifier, "katari")
+        repeatedNL()
+        val path = stringImportPath()
+        val alias = optionalAlias()
+        return KatariScriptImportNode(position = token.position, path = path, alias = alias, isLoad = true)
+    }
+
+    private fun optionalAlias(): String? {
+        repeatedNL()
+        return if (isCurrentToken(TokenType.Identifier, "as")) {
+            eat(TokenType.Identifier, "as")
+            repeatedNL()
+            eat(TokenType.Identifier).value as String
+        } else {
+            null
+        }
+    }
+
+    private fun stringImportPath(): String {
+        val value = when {
+            isCurrentToken(TokenType.Symbol, "\"") -> stringLiteral()
+            isCurrentToken(TokenType.Symbol, "\"\"\"") -> stringLiteral()
+            currentToken.type == TokenType.StringLiteral -> {
+                val token = eat(TokenType.StringLiteral)
+                StringNode(token.position, listOf(StringLiteralNode(token.position, token.value as String)))
+            }
+            else -> throw UnexpectedTokenException(currentToken)
+        }
+        val stringNode = value as? StringNode
+            ?: throw UnexpectedTokenException(currentToken)
+        return stringNode.nodes.joinToString("") { node ->
+            (node as? StringLiteralNode)?.content
+                ?: throw UnexpectedTokenException(currentToken)
+        }
     }
 
     private fun narrativeCheckpoint(): NarrativeCheckpointNode {
