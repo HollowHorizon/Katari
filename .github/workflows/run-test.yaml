@@ -16,22 +16,77 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v3
         with:
           distribution: 'corretto'
           java-version: '17'
+
       - uses: actions/setup-java@v3
         with:
           distribution: 'corretto'
           java-version: '21'
-      - run: ./gradlew check -PCICD=GitHubActions # the "clean" task would fail on GitHub Actions: https://github.com/sunny-chung/kdatetime-multiplatform/actions/runs/8213856523/job/22465724399
-      - uses: actions/upload-artifact@v3
+
+      - name: Run Tests
+        run: ./gradlew check -PCICD=GitHubActions
+
+      - name: Upload Artifacts (Interpreter)
+        uses: actions/upload-artifact@v3
         with:
           name: test-result_${{ matrix.os }}_interpreter
           path: interpreter/build/reports/tests
         if: ${{ !cancelled() }}
-      - uses: actions/upload-artifact@v3
+
+      - name: Upload Artifacts (Stdlib)
+        uses: actions/upload-artifact@v3
         with:
           name: test-result_${{ matrix.os }}_stdlib
           path: stdlib/build/reports/tests
         if: ${{ !cancelled() }}
+
+      - name: Send Telegram Notification
+        if: always()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_THREAD_ID: ${{ secrets.TG_THREAD_ID }}
+          STATUS: ${{ job.status }}
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY#*/}"
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          
+          if [ "$STATUS" = "success" ]; then
+            ICON="✅"
+            RESULT_TEXT="Тесты прошли"
+          elif [ "$STATUS" = "failure" ]; then
+            ICON="❌"
+            RESULT_TEXT="Тесты провалились"
+          else
+            ICON="⚠️"
+            RESULT_TEXT="С тестами чёт не то: $STATUS"
+          fi
+
+          HEADER="<b>$ICON [$REPO_NAME:$BRANCH_NAME]</b>"
+          FOOTER="Status: <b>$RESULT_TEXT</b>\n<a href=\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\">View Workflow Run →</a>"
+          
+          COMMIT_MSG=$(jq -r '.head_commit.message' "$GITHUB_EVENT_PATH" | head -n 1)
+          COMMIT_URL=$(jq -r '.head_commit.url' "$GITHUB_EVENT_PATH")
+          COMMIT_ID=$(echo "$GITHUB_SHA" | cut -c1-7)
+
+          FINAL_TEXT="$HEADER"$'\n\n'"Commit: <code><a href=\"$COMMIT_URL\">$COMMIT_ID</a></code>: $COMMIT_MSG"$'\n\n'"$FOOTER"
+
+          jq -n \
+            --arg chat_id "$TG_CHAT_ID" \
+            --arg thread_id "$TG_THREAD_ID" \
+            --arg text "$FINAL_TEXT" \
+            '{
+              chat_id: $chat_id,
+              message_thread_id: $thread_id,
+              parse_mode: "HTML",
+              disable_web_page_preview: true,
+              text: $text
+            }' > tg_payload.json
+
+          curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d @tg_payload.json
