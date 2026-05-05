@@ -125,6 +125,25 @@ class KatariCompiler(
         lambdaParameterBindings: Map<String, String> = emptyMap(),
         enumParameterBindings: Map<String, String> = emptyMap(),
     ) {
+        withStatementScope(
+            instructions = instructions,
+            isFunctionBoundary = isFunctionBoundary,
+            shadowedNames = shadowedNames,
+            lambdaParameterBindings = lambdaParameterBindings,
+            enumParameterBindings = enumParameterBindings,
+        ) {
+            compileStatements(statements, instructions)
+        }
+    }
+
+    private fun withStatementScope(
+        instructions: MutableList<KatariInstruction>,
+        isFunctionBoundary: Boolean = false,
+        shadowedNames: Set<String> = emptySet(),
+        lambdaParameterBindings: Map<String, String> = emptyMap(),
+        enumParameterBindings: Map<String, String> = emptyMap(),
+        block: () -> Unit,
+    ) {
         lambdaBindings.addLast((shadowedNames.associateWith { null } + lambdaParameterBindings).toMutableMap())
         taskBindings.addLast(shadowedNames.associateWith { false }.toMutableMap())
         enumTypeBindings.addLast((shadowedNames.associateWith { null } + enumParameterBindings).toMutableMap())
@@ -134,7 +153,7 @@ class KatariCompiler(
             frameIdStack.addLast(newFrameId)
         }
         try {
-            compileStatements(statements, instructions)
+            block()
             val scope = checkpointScopes.last()
             val unresolvedToBubble = mutableListOf<UnresolvedJump>()
             scope.unresolved.forEach { jump ->
@@ -1232,21 +1251,16 @@ class KatariCompiler(
             )
         } else {
             val returnName = "__narrative_return_${nextTemporarySlot()}"
-            compileStatementsInScope(
-                body.statements.dropLast(1),
-                instructions,
+            validateUserFunctionBodyAsExpression(body, functionName)
+            withStatementScope(
+                instructions = instructions,
                 isFunctionBoundary = true,
                 shadowedNames = parameterNames.toSet() + setOfNotNull(receiverExpression?.let { "this" }),
                 lambdaParameterBindings = lambdaParameterBindings,
                 enumParameterBindings = declaration.enumParameterBindings(receiverExpression != null),
-            )
-            validateUserFunctionBodyAsExpression(body, functionName)
-            val last = body.statements.last()
-            withExpressionBindings(
-                shadowedNames = parameterNames.toSet() + setOfNotNull(receiverExpression?.let { "this" }),
-                lambdaParameterBindings = lambdaParameterBindings,
-                enumParameterBindings = declaration.enumParameterBindings(receiverExpression != null),
             ) {
+                compileStatements(body.statements.dropLast(1), instructions)
+                val last = body.statements.last()
                 when (last) {
                     is ReturnNode -> {
                         val returnValue = last.value ?: NullNode
@@ -1255,6 +1269,7 @@ class KatariCompiler(
                     else -> compileExpressionIntoTarget(last, ResultTarget.Variable(returnName, declaresLocal = true), instructions)
                 }
             }
+            val last = body.statements.last()
             instructions += ExitCallFrameInstruction(
                 returnExpression = VariableExpression(returnName, position = last.position),
                 resultTarget = resultTarget,
