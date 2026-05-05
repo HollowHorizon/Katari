@@ -46,6 +46,37 @@ object StateSnapshotValidator {
                 }
             }
         }
+        snapshot.values.forEach { (valueId, value) ->
+            validateNestedValueRefs(
+                path = "values[$valueId]",
+                value = value,
+                values = snapshot.values,
+            )
+        }
+    }
+
+    private fun MutableList<StateSnapshotDiagnostic>.validateNestedValueRefs(
+        path: String,
+        value: ValueSnapshot,
+        values: Map<Int, ValueSnapshot>,
+    ) {
+        when (value) {
+            is LambdaValueSnapshot -> value.capturedVariableRefs.forEach { (name, ref) ->
+                validateValueRef(
+                    path = "$path.capturedVariableRefs[$name]",
+                    ref = ref,
+                    values = values,
+                )
+            }
+            is KatariTaskValueSnapshot -> value.capturedVariableRefs.forEach { (name, ref) ->
+                validateValueRef(
+                    path = "$path.capturedVariableRefs[$name]",
+                    ref = ref,
+                    values = values,
+                )
+            }
+            else -> Unit
+        }
     }
 
     private fun MutableList<StateSnapshotDiagnostic>.validateValueRef(
@@ -72,6 +103,14 @@ object StateSnapshotValidator {
                     StateSnapshotDiagnostic(
                         path = "$taskPath.id",
                         message = "$taskPath.id duplicates task id `${task.id}`",
+                    )
+                )
+            }
+            if (task.parentTaskId == task.id) {
+                add(
+                    StateSnapshotDiagnostic(
+                        path = "$taskPath.parentTaskId",
+                        message = "$taskPath.parentTaskId cannot reference the task itself",
                     )
                 )
             }

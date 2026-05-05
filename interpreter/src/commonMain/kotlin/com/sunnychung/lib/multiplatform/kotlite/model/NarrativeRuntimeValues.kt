@@ -2,6 +2,7 @@ package com.sunnychung.lib.multiplatform.kotlite.model
 
 class NarrativeLambdaValue(
     val lambdaId: String,
+    val capturedVariables: Map<String, RuntimeValue> = emptyMap(),
     private val symbolTable: SymbolTable,
 ) : RuntimeValue {
     override fun type(): DataType = FunctionType(
@@ -14,10 +15,14 @@ class NarrativeLambdaValue(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is NarrativeLambdaValue) return false
-        return lambdaId == other.lambdaId
+        return lambdaId == other.lambdaId && capturedVariables == other.capturedVariables
     }
 
-    override fun hashCode(): Int = lambdaId.hashCode()
+    override fun hashCode(): Int {
+        var result = lambdaId.hashCode()
+        result = 31 * result + capturedVariables.hashCode()
+        return result
+    }
 }
 
 private fun syntheticEnumClass(typeId: String, symbolTable: SymbolTable): ClassDefinition {

@@ -61,6 +61,7 @@ class StateSnapshotCodec(
                         functionId = frame.functionId,
                         lexicalParentFrameId = frame.lexicalParentFrameId,
                         variableRefs = frame.localVariables.mapValues { (_, value) -> valueTable.reference(value) },
+                        isClosure = frame.isClosure,
                     )
                 },
                 nextCallFrameId = task.nextCallFrameId,
@@ -68,12 +69,13 @@ class StateSnapshotCodec(
                 status = serializeStatus(task.status),
                 resultRef = task.result?.let { valueTable.reference(it) },
                 raceGroupId = task.raceGroupId,
+                parentTaskId = task.parentTaskId,
             )
         }
         return KatariStateSnapshot(
             programVersion = state.programVersion,
             tasks = tasks,
-            values = valueTable.values.mapValues { (_, value) -> serializeValue(value) },
+            values = valueTable.serializeValues { value -> serializeValue(value, valueTable) },
         )
     }
 
@@ -83,9 +85,15 @@ class StateSnapshotCodec(
     ): KatariState {
         StateSnapshotValidator.validate(snapshot)
         val sharedValues = mutableMapOf<Int, RuntimeValue>()
-        snapshot.values.forEach { (id, value) ->
-            sharedValues[id] = restoreValue(value, context)
+        suspend fun restoreSharedValue(id: Int): RuntimeValue {
+            sharedValues[id]?.let { return it }
+            val value = restoreValue(snapshot.values.getValue(id), context) { ref ->
+                restoreSharedValue(ref.valueId)
+            }
+            sharedValues[id] = value
+            return value
         }
+        snapshot.values.keys.sorted().forEach { restoreSharedValue(it) }
         return KatariState(
             programVersion = snapshot.programVersion,
             tasks = snapshot.tasks.map { task ->
@@ -101,6 +109,7 @@ class StateSnapshotCodec(
                         functionId = frame.functionId,
                         lexicalParentFrameId = frame.lexicalParentFrameId,
                         localVariables = restoreVariables(frame.variableRefs),
+                        isClosure = frame.isClosure,
                     )
                 }
                 TaskState(
@@ -114,6 +123,7 @@ class StateSnapshotCodec(
                     status = restoreStatus(task.status),
                     result = task.resultRef?.let { sharedValues.getValue(it.valueId) },
                     raceGroupId = task.raceGroupId,
+                    parentTaskId = task.parentTaskId,
                 )
             },
         )
@@ -128,7 +138,10 @@ class StateSnapshotCodec(
         }
     }
 
-    private fun serializeValue(value: RuntimeValue): ValueSnapshot {
+    private fun serializeValue(
+        value: RuntimeValue,
+        valueTable: NarrativeSnapshotValueTable,
+    ): ValueSnapshot {
         return when (value) {
             is DefaultArgumentMarker -> throw IllegalArgumentException("Default argument marker cannot be snapshotted")
             is NullValue -> NullValueSnapshot
@@ -136,24 +149,31 @@ class StateSnapshotCodec(
             is IntValue -> Int32ValueSnapshot(value.value)
             is DoubleValue -> Float64ValueSnapshot(value.value)
             is StringValue -> TextValueSnapshot(value.value)
-            is NarrativeLambdaValue -> LambdaValueSnapshot(value.lambdaId)
+            is NarrativeLambdaValue -> LambdaValueSnapshot(
+                id = value.lambdaId,
+                capturedVariableRefs = value.capturedVariables.mapValues { (_, captured) ->
+                    valueTable.reference(captured)
+                },
+            )
             is KatariTaskValue -> KatariTaskValueSnapshot(
                 taskId = value.taskId,
                 entryPointer = value.entryPointer,
                 rootFrameId = value.rootFrameId,
-                capturedVariables = value.capturedVariables.mapValues { (_, captured) -> serializeValue(captured) },
+                capturedVariableRefs = value.capturedVariables.mapValues { (_, captured) ->
+                    valueTable.reference(captured)
+                },
                 started = value.started,
             )
             is NarrativeEnumValue -> EnumValueSnapshot(
                 typeId = value.typeId,
                 entryName = value.entryName,
                 ordinal = value.ordinal,
-                properties = value.properties.mapValues { (_, propertyValue) -> serializeValue(propertyValue) },
+                properties = value.properties.mapValues { (_, propertyValue) -> serializeValue(propertyValue, valueTable) },
             )
             is NarrativeEnumEntriesValue -> EnumEntriesValueSnapshot(
                 typeId = value.typeId,
                 entries = value.entries.map {
-                    serializeValue(it) as EnumValueSnapshot
+                    serializeValue(it, valueTable) as EnumValueSnapshot
                 },
             )
             is NarrativeHostValue -> {
@@ -175,7 +195,7 @@ class StateSnapshotCodec(
                     val iterator = value.value as? EnumEntriesIteratorValue
                         ?: throw IllegalArgumentException("Enum entries iterator value is corrupted")
                     EnumEntriesIteratorValueSnapshot(
-                        entries = iterator.entries.map { serializeValue(it) as EnumValueSnapshot },
+                        entries = iterator.entries.map { serializeValue(it, valueTable) as EnumValueSnapshot },
                         index = iterator.index,
                     )
                 } else {
@@ -191,6 +211,7 @@ class StateSnapshotCodec(
     private suspend fun restoreValue(
         snapshot: ValueSnapshot,
         context: ValueRestoreContext,
+        restoreReference: suspend (ValueReferenceSnapshot) -> RuntimeValue,
     ): RuntimeValue {
         return when (snapshot) {
             NullValueSnapshot -> NullValue
@@ -198,12 +219,16 @@ class StateSnapshotCodec(
             is Int32ValueSnapshot -> IntValue(snapshot.value, symbolTable())
             is Float64ValueSnapshot -> DoubleValue(snapshot.value, symbolTable())
             is TextValueSnapshot -> StringValue(snapshot.value, symbolTable())
-            is LambdaValueSnapshot -> NarrativeLambdaValue(snapshot.id, symbolTable())
+            is LambdaValueSnapshot -> NarrativeLambdaValue(
+                lambdaId = snapshot.id,
+                capturedVariables = snapshot.capturedVariableRefs.mapValues { (_, ref) -> restoreReference(ref) },
+                symbolTable = symbolTable(),
+            )
             is KatariTaskValueSnapshot -> KatariTaskValue(
                 taskId = snapshot.taskId,
                 entryPointer = snapshot.entryPointer,
                 rootFrameId = snapshot.rootFrameId,
-                capturedVariables = snapshot.capturedVariables.mapValues { (_, value) -> restoreValue(value, context) },
+                capturedVariables = snapshot.capturedVariableRefs.mapValues { (_, ref) -> restoreReference(ref) },
                 started = snapshot.started,
                 symbolTable = symbolTable(),
             )
@@ -211,18 +236,18 @@ class StateSnapshotCodec(
                 typeId = snapshot.typeId,
                 entryName = snapshot.entryName,
                 ordinal = snapshot.ordinal,
-                properties = snapshot.properties.mapValues { (_, value) -> restoreValue(value, context) },
+                properties = snapshot.properties.mapValues { (_, value) -> restoreValue(value, context, restoreReference) },
                 symbolTable = symbolTable(),
             )
             is EnumEntriesValueSnapshot -> NarrativeEnumEntriesValue(
                 typeId = snapshot.typeId,
-                entries = snapshot.entries.map { restoreValue(it, context) as NarrativeEnumValue },
+                entries = snapshot.entries.map { restoreValue(it, context, restoreReference) as NarrativeEnumValue },
                 symbolTable = symbolTable(),
             )
             is EnumEntriesIteratorValueSnapshot -> NarrativeHostValue(
                 typeId = KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID,
                 value = EnumEntriesIteratorValue(
-                    entries = snapshot.entries.map { restoreValue(it, context) as NarrativeEnumValue },
+                    entries = snapshot.entries.map { restoreValue(it, context, restoreReference) as NarrativeEnumValue },
                     index = snapshot.index,
                 ),
                 symbolTable = symbolTable(),
@@ -504,6 +529,16 @@ private class NarrativeSnapshotValueTable {
             .takeIf { it >= 0 }
             ?: entries.size.also { entries += value }
         return ValueReferenceSnapshot(index)
+    }
+
+    fun serializeValues(serialize: (RuntimeValue) -> ValueSnapshot): Map<Int, ValueSnapshot> {
+        val snapshots = linkedMapOf<Int, ValueSnapshot>()
+        var index = 0
+        while (index < entries.size) {
+            snapshots[index] = serialize(entries[index])
+            ++index
+        }
+        return snapshots
     }
 
     private fun RuntimeValue.hasSameSnapshotIdentityAs(other: RuntimeValue): Boolean {

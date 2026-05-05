@@ -879,6 +879,67 @@ class KatariInstanceTest {
     }
 
     @Test
+    fun lambdaCapturesExternalVariablesAcrossSnapshotWithoutDuplicatingValues() = runTest {
+        val events = mutableListOf<String>()
+        val gate = GateCallable()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+            register(gate)
+        }
+        val codec = StateSnapshotCodec(executionEnvironment = bindings.executionEnvironment)
+        val program = KatariNarrativeProgram(
+            filename = "<Narrative>",
+            code = """
+                val prefix = "v="
+                val formatter = { value: Int -> "${'$'}prefix${'$'}value" }
+                gate("before")
+                val result = formatter(7)
+                "${'$'}result"
+            """.trimIndent(),
+            bindings = bindings,
+        )
+        val instance = KatariInstance(
+            program = program,
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        val snapshot = instance.serializeState()
+        instance.cancel()
+
+        val frameRefs = snapshot.tasks.single().callFrames.last().variableRefs
+        val lambdaSnapshot = snapshot.values.getValue(frameRefs.getValue("formatter").valueId)
+        assertIs<LambdaValueSnapshot>(lambdaSnapshot)
+        assertEquals(frameRefs.getValue("prefix"), lambdaSnapshot.capturedVariableRefs.getValue("prefix"))
+
+        val restored = KatariInstance(
+            program = program,
+            initialState = codec.restore(snapshot),
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+        restored.start()
+        advanceUntilIdle()
+        gate.resume("before")
+        advanceUntilIdle()
+        restored.join()
+
+        assertEquals(listOf("v=7"), events)
+    }
+
+    @Test
     fun snapshotStoresLocalsOnlyInsideCallFrames() = runTest {
         val codec = StateSnapshotCodec()
         val instance = KatariInstance(
@@ -1144,6 +1205,62 @@ class KatariInstanceTest {
     }
 
     @Test
+    fun asyncTaskCanJumpToCheckpointInsideItsOwnBody() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val task = async {
+                        var i = 0
+                        checkpoint loop
+                        i = i + 1
+                        if (i < 3) {
+                            jump loop
+                        }
+                        return i
+                    }
+                    task.start()
+                    val result = task.join()
+                    "looped ${'$'}result"
+                """.trimIndent(),
+            ),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(listOf("looped 3"), events)
+    }
+
+    @Test
+    fun asyncTaskCannotJumpToCheckpointOutsideItsBody() {
+        assertFailsWith<UnsupportedOperationException> {
+            KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    checkpoint outer
+                    val task = async {
+                        jump outer
+                    }
+                    task.start()
+                """.trimIndent(),
+            )
+        }
+    }
+
+    @Test
     fun raceReturnsFirstCompletedBranchAndStopsTheRest() = runTest {
         val events = mutableListOf<String>()
         val gate = GateCallable()
@@ -1179,10 +1296,67 @@ class KatariInstanceTest {
         advanceUntilIdle()
         gate.resume("fast")
         advanceUntilIdle()
+        gate.resume("slow")
+        advanceUntilIdle()
         instance.join()
 
         assertEquals(listOf("winner fast"), events)
         assertTrue(instance.currentState().tasks.any { it.id.endsWith("_0") && it.status == TaskStatus.Stopped })
+    }
+
+    @Test
+    fun nestedAsyncAndRaceTasksResumeExpectedWinner() = runTest {
+        val events = mutableListOf<String>()
+        val gate = GateCallable()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+            register(gate)
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    fun nested(label: String) {
+                        val task = async {
+                            gate(label)
+                            return label
+                        }
+                        task.start()
+                        task.join()
+                    }
+
+                    val outer = async {
+                        val result = race {
+                            nested("slow") -> "slow"
+                            nested("fast") -> "fast"
+                        }
+                        return result
+                    }
+                    outer.start()
+                    val winner = outer.join()
+                    "winner ${'$'}winner"
+                """.trimIndent(),
+                bindings = bindings,
+            ),
+            executionEnvironment = bindings.executionEnvironment,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        gate.resume("fast")
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(listOf("winner fast"), events)
     }
 
     @Test

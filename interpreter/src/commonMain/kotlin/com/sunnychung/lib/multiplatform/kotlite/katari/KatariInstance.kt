@@ -202,16 +202,7 @@ class KatariInstance(
                                 currentState = currentState.completeTask(taskIndex, result)
                             }
                             is EnterCallFrameInstruction -> {
-                                val nextFrame = CallFrameState(
-                                    id = task.nextCallFrameId,
-                                    functionId = instruction.functionId,
-                                    lexicalParentFrameId = instruction.lexicalParentFrameId,
-                                )
-                                val updated = task.copy(
-                                    instructionPointer = task.instructionPointer + 1,
-                                    callFrames = task.callFrames + nextFrame,
-                                    nextCallFrameId = task.nextCallFrameId + 1,
-                                )
+                                val updated = applyEnterCallFrameInstruction(task, instruction)
                                 currentState = currentState.updateTask(index = taskIndex, task = syncTopLocals(updated))
                             }
                             is ExitCallFrameInstruction -> {
@@ -494,7 +485,7 @@ class KatariInstance(
             ?: throw IllegalArgumentException("Katari task operation `${instruction.operation}` expects KatariTask receiver")
         return when (instruction.operation) {
             TaskControlOperation.Start -> {
-                startAsyncTask(taskValue)
+                startAsyncTask(taskValue, parentTaskId = task.id)
                 currentState.updateTask(
                     index = taskIndex,
                     task = applyResultTarget(task, instruction.resultTarget, NullValue, task.instructionPointer + 1),
@@ -566,6 +557,7 @@ class KatariInstance(
                 nextCallFrameId = maxOf(entry.rootFrameId + 1, ROOT_CALL_FRAME_ID + 1),
                 status = TaskStatus.Ready,
                 raceGroupId = instruction.raceId,
+                parentTaskId = task.id,
             )
         }
         return currentState.copy(
@@ -587,7 +579,10 @@ class KatariInstance(
         )
     }
 
-    private fun startAsyncTask(taskValue: KatariTaskValue) {
+    private fun startAsyncTask(
+        taskValue: KatariTaskValue,
+        parentTaskId: String?,
+    ) {
         if (currentState.tasks.any { it.id == taskValue.taskId }) {
             taskValue.started = true
             return
@@ -607,12 +602,17 @@ class KatariInstance(
                 callFrames = listOf(rootFrame),
                 nextCallFrameId = maxOf(taskValue.rootFrameId + 1, ROOT_CALL_FRAME_ID + 1),
                 status = TaskStatus.Ready,
+                parentTaskId = parentTaskId,
             )
         )
         taskValue.started = true
     }
 
     private fun stopTask(taskId: String) {
+        currentState.tasks
+            .filter { it.parentTaskId == taskId && !isTaskFinal(it.status) }
+            .map { it.id }
+            .forEach { stopTask(it) }
         val index = currentState.tasks.indexOfFirst { it.id == taskId }
         if (index < 0) return
         inFlightTasks -= taskId
@@ -791,7 +791,11 @@ class KatariInstance(
                 is LiteralExpression -> expression.value
                 is VariableExpression -> resolveVariableValue(state, task, expression.name)
                 is SlotExpression -> resolveSlotValue(state, task, expression.slot)
-                is LambdaLiteralExpression -> NarrativeLambdaValue(expression.lambdaId, snapshotCodec.symbolTable())
+                is LambdaLiteralExpression -> NarrativeLambdaValue(
+                    lambdaId = expression.lambdaId,
+                    capturedVariables = visibleLocalVariables(task),
+                    symbolTable = snapshotCodec.symbolTable(),
+                )
                 is EnumEntryExpression -> program.enumDefinitions.getValue(expression.typeId).entry(expression.entryName)
                 is EnumEntriesExpression -> {
                     val definition = program.enumDefinitions.getValue(expression.typeId)
@@ -998,7 +1002,38 @@ class KatariInstance(
             variables += frame.localVariables
         }
         collect(currentCallFrame(task).id)
-        return variables
+        return variables.filterKeys { !isInternalSlotVariable(it) }
+    }
+
+    private fun applyEnterCallFrameInstruction(
+        task: TaskState,
+        instruction: EnterCallFrameInstruction,
+    ): TaskState {
+        var callFrames = task.callFrames
+        var nextCallFrameId = task.nextCallFrameId
+        val lexicalParentFrameId = instruction.closureExpression?.let { expression ->
+            val closure = evaluateExpression(currentState, task, expression) as? NarrativeLambdaValue
+                ?: throw IllegalArgumentException("Lambda call `${instruction.functionId}` expects lambda receiver")
+            val closureFrameId = nextCallFrameId++
+            callFrames = callFrames + CallFrameState(
+                id = closureFrameId,
+                functionId = "${instruction.functionId}#closure",
+                lexicalParentFrameId = instruction.lexicalParentFrameId,
+                localVariables = closure.capturedVariables,
+                isClosure = true,
+            )
+            closureFrameId
+        } ?: instruction.lexicalParentFrameId
+        val nextFrame = CallFrameState(
+            id = nextCallFrameId,
+            functionId = instruction.functionId,
+            lexicalParentFrameId = lexicalParentFrameId,
+        )
+        return task.copy(
+            instructionPointer = task.instructionPointer + 1,
+            callFrames = callFrames + nextFrame,
+            nextCallFrameId = nextCallFrameId + 1,
+        )
     }
 
     private fun applyExitCallFrameInstruction(
@@ -1008,11 +1043,13 @@ class KatariInstance(
     ): TaskState {
         require(task.callFrames.size > 1) { "Cannot exit root call frame" }
         val exitingFrame = currentCallFrame(task)
+        val closureFrame = task.callFrames.dropLast(1).lastOrNull()?.takeIf { it.isClosure }
+        val exitingFrameIds = setOfNotNull(exitingFrame.id, closureFrame?.id)
         val popped = task.copy(
-            callFrames = task.callFrames.dropLast(1),
+            callFrames = if (closureFrame != null) task.callFrames.dropLast(2) else task.callFrames.dropLast(1),
             instructionPointer = task.instructionPointer + 1,
             slots = task.slots.filterValues { ref ->
-                (ref as? SlotValue.VariableReference)?.frameId != exitingFrame.id
+                (ref as? SlotValue.VariableReference)?.frameId !in exitingFrameIds
             },
         )
         val nextTask = applyResultTarget(
@@ -1257,8 +1294,13 @@ private fun collectKnownTaskIds(state: KatariState): Set<String> {
 }
 
 private fun MutableSet<String>.collectTaskId(value: RuntimeValue) {
-    if (value is KatariTaskValue) {
-        this += value.taskId
+    when (value) {
+        is KatariTaskValue -> {
+            this += value.taskId
+            value.capturedVariables.values.forEach { collectTaskId(it) }
+        }
+        is NarrativeLambdaValue -> value.capturedVariables.values.forEach { collectTaskId(it) }
+        else -> Unit
     }
 }
 

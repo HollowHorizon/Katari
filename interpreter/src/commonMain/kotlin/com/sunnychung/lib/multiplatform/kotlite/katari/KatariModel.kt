@@ -88,6 +88,7 @@ data class CompleteTaskInstruction(
 data class EnterCallFrameInstruction(
     val functionId: String,
     val lexicalParentFrameId: Int? = null,
+    val closureExpression: KatariExpression? = null,
     override val position: SourcePosition? = null,
 ) : KatariInstruction
 
@@ -239,6 +240,7 @@ data class TaskState(
     val status: TaskStatus = TaskStatus.Ready,
     val result: RuntimeValue? = null,
     val raceGroupId: String? = null,
+    val parentTaskId: String? = null,
 )
 
 data class CallFrameState(
@@ -246,6 +248,7 @@ data class CallFrameState(
     val functionId: String,
     val lexicalParentFrameId: Int?,
     val localVariables: Map<String, RuntimeValue> = emptyMap(),
+    val isClosure: Boolean = false,
 )
 
 sealed interface SlotValue {
@@ -307,6 +310,7 @@ data class TaskSnapshot(
     val status: TaskStatusSnapshot,
     val resultRef: ValueReferenceSnapshot? = null,
     val raceGroupId: String? = null,
+    val parentTaskId: String? = null,
 )
 
 @Serializable
@@ -315,6 +319,7 @@ data class CallFrameSnapshot(
     val functionId: String,
     val lexicalParentFrameId: Int? = null,
     val variableRefs: Map<String, ValueReferenceSnapshot> = emptyMap(),
+    val isClosure: Boolean = false,
 )
 
 @Serializable
@@ -407,7 +412,10 @@ data class TextValueSnapshot(val value: String) : ValueSnapshot()
 
 @Serializable
 @SerialName("lambda")
-data class LambdaValueSnapshot(val id: String) : ValueSnapshot()
+data class LambdaValueSnapshot(
+    val id: String,
+    val capturedVariableRefs: Map<String, ValueReferenceSnapshot> = emptyMap(),
+) : ValueSnapshot()
 
 @Serializable
 @SerialName("katari_task")
@@ -415,7 +423,7 @@ data class KatariTaskValueSnapshot(
     val taskId: String,
     val entryPointer: Int,
     val rootFrameId: Int,
-    val capturedVariables: Map<String, @Polymorphic ValueSnapshot>,
+    val capturedVariableRefs: Map<String, ValueReferenceSnapshot>,
     val started: Boolean,
 ) : ValueSnapshot()
 

@@ -697,6 +697,7 @@ class KatariCompiler(
                     instructions = instructions,
                     resultTarget = ResultTarget.Variable(targetName, declaresLocal = true),
                     receiverExpression = invocation.receiverExpression,
+                    closureExpression = invocation.closureExpression,
                 )
             } else {
                 instructions += compileCall(
@@ -750,6 +751,7 @@ class KatariCompiler(
                                     instructions = instructions,
                                     resultTarget = ResultTarget.Variable(targetName),
                                     receiverExpression = invocation.receiverExpression,
+                                    closureExpression = invocation.closureExpression,
                                 )
                             } else {
                                 instructions += compileCall(
@@ -892,6 +894,7 @@ class KatariCompiler(
                     instructions = instructions,
                     resultTarget = target,
                     receiverExpression = invocation.receiverExpression,
+                    closureExpression = invocation.closureExpression,
                 )
             } else {
                 instructions += compileCall(
@@ -1162,6 +1165,7 @@ class KatariCompiler(
         instructions: MutableList<KatariInstruction>,
         resultTarget: ResultTarget?,
         receiverExpression: KatariExpression? = null,
+        closureExpression: KatariExpression? = null,
     ) {
         val functionName = declaration.name
         require(argumentExpressions.size == declaration.valueParameters.size) {
@@ -1186,6 +1190,7 @@ class KatariCompiler(
         instructions += EnterCallFrameInstruction(
             functionId = functionName,
             lexicalParentFrameId = lexicalParentFrameId,
+            closureExpression = closureExpression,
             position = callPosition,
         )
         receiverExpression?.let {
@@ -1342,6 +1347,7 @@ class KatariCompiler(
             instructions = instructions,
             resultTarget = null,
             receiverExpression = invocation.receiverExpression,
+            closureExpression = invocation.closureExpression,
         )
         return true
     }
@@ -1360,10 +1366,16 @@ class KatariCompiler(
     ): ResolvedUserFunctionInvocation? {
         return when (val function = node.function) {
             is VariableReferenceNode -> {
-                val declaration = resolveCallableDeclaration(resolveCallableName(function.variableName), requiresReceiver = false) ?: return null
+                val callableName = resolveCallableName(function.variableName)
+                val directDeclaration = resolveCallableDeclaration(callableName, requiresReceiver = false)
+                val lambdaDeclaration = resolveLambdaCallableDeclaration(function.variableName)
+                val declaration = directDeclaration ?: lambdaDeclaration ?: return null
                 ResolvedUserFunctionInvocation(
                     declaration = declaration,
                     receiverExpression = null,
+                    closureExpression = lambdaDeclaration?.let {
+                        VariableExpression(resolveVariableName(function.variableName), position = function.position)
+                    },
                     argumentExpressions = compileCallArguments(
                         callPosition = node.position,
                         callArguments = node.arguments,
@@ -1436,6 +1448,7 @@ class KatariCompiler(
                         instructions = instructions,
                         resultTarget = ResultTarget.Slot(slot),
                         receiverExpression = invocation.receiverExpression,
+                        closureExpression = invocation.closureExpression,
                     )
                     return SlotExpression(slot, position = expression.position)
                 }
@@ -1823,6 +1836,10 @@ class KatariCompiler(
                 requiresReceiver == null || (declaration.receiver != null) == requiresReceiver
             }
             ?.let { return it }
+        return null
+    }
+
+    private fun resolveLambdaCallableDeclaration(name: String): FunctionDeclarationNode? {
         val lambdaId = resolveLambdaBinding(name) ?: return null
         return userFunctions[lambdaId]?.firstOrNull()
     }
@@ -1998,6 +2015,7 @@ private data class ResolvedUserFunctionInvocation(
     val declaration: FunctionDeclarationNode,
     val receiverExpression: KatariExpression?,
     val argumentExpressions: List<KatariExpression>,
+    val closureExpression: KatariExpression? = null,
 )
 
 private fun FunctionDeclarationNode.isNarrativeVararg(): Boolean {
