@@ -27,11 +27,14 @@ import com.sunnychung.lib.multiplatform.kotlite.model.IntegerNode
 import com.sunnychung.lib.multiplatform.kotlite.model.InfixFunctionCallNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
 import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeAsyncNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
@@ -69,18 +72,23 @@ class KatariCompiler(
 
     private var temporarySlotCounter: Int = 0
     private var lambdaCounter = 0
+    private var taskCounter = 0
+    private var raceCounter = 0
     private var nextFrameIdCounter: Int = ROOT_CALL_FRAME_ID
     private val loopContexts = ArrayDeque<LoopContext>()
     private val checkpointScopes = ArrayDeque<CheckpointScope>()
     private val userFunctions = mutableMapOf<String, MutableList<FunctionDeclarationNode>>()
     private val enumDefinitions = linkedMapOf<String, KatariEnumDefinition>()
     private val lambdaBindings = ArrayDeque<MutableMap<String, String?>>()
+    private val taskBindings = ArrayDeque<MutableMap<String, Boolean>>()
     private val enumTypeBindings = ArrayDeque<MutableMap<String, String?>>()
     private val frameIdStack = ArrayDeque<Int>()
 
     fun compile(script: ScriptNode): KatariProgram {
         temporarySlotCounter = 0
         lambdaCounter = 0
+        taskCounter = 0
+        raceCounter = 0
         nextFrameIdCounter = ROOT_CALL_FRAME_ID
         loopContexts.clear()
         checkpointScopes.clear()
@@ -88,6 +96,7 @@ class KatariCompiler(
         enumDefinitions.clear()
         enumDefinitions.putAll(importedEnumDefinitions)
         lambdaBindings.clear()
+        taskBindings.clear()
         enumTypeBindings.clear()
         frameIdStack.clear()
 
@@ -117,6 +126,7 @@ class KatariCompiler(
         enumParameterBindings: Map<String, String> = emptyMap(),
     ) {
         lambdaBindings.addLast((shadowedNames.associateWith { null } + lambdaParameterBindings).toMutableMap())
+        taskBindings.addLast(shadowedNames.associateWith { false }.toMutableMap())
         enumTypeBindings.addLast((shadowedNames.associateWith { null } + enumParameterBindings).toMutableMap())
         checkpointScopes.addLast(CheckpointScope(isFunctionBoundary = isFunctionBoundary))
         if (isFunctionBoundary) {
@@ -155,6 +165,7 @@ class KatariCompiler(
             }
             checkpointScopes.removeLast()
             enumTypeBindings.removeLast()
+            taskBindings.removeLast()
             lambdaBindings.removeLast()
         }
     }
@@ -173,6 +184,8 @@ class KatariCompiler(
             is NarrativeCheckpointNode -> compileCheckpoint(statement, instructions)
             is NarrativeJumpNode -> compileJump(statement, instructions)
             is NarrativeChooseNode -> compileChoose(statement, instructions)
+            is NarrativeAsyncNode -> compileExpression(statement, instructions)
+            is NarrativeRaceNode -> compileExpression(statement, instructions)
             is FunctionDeclarationNode -> throw UnsupportedOperationException(
                 "${statement.position} Local Katari function declarations are not supported. Declare functions at top-level only."
             )
@@ -191,10 +204,14 @@ class KatariCompiler(
                 position = statement.position,
             )
             is FunctionCallNode -> {
-                if (!compileInlineCapableFunctionCall(statement, instructions)) {
+                val taskControl = compileTaskControlCall(statement, instructions, null)
+                if (taskControl != null) {
+                    instructions += taskControl
+                } else if (!compileInlineCapableFunctionCall(statement, instructions)) {
                     instructions += compileCall(statement, instructions)
                 }
             }
+            is InfixFunctionCallNode -> compileInfixFunctionCallStatement(statement, instructions)
             else -> throw UnsupportedOperationException("${statement.position} Katari compiler does not support `${statement::class.simpleName}` yet")
         }
     }
@@ -410,6 +427,128 @@ class KatariCompiler(
         return null
     }
 
+    private fun compileAsyncTask(
+        node: NarrativeAsyncNode,
+        instructions: MutableList<KatariInstruction>,
+        resultTarget: ResultTarget,
+    ): CreateAsyncTaskInstruction {
+        val compiled = compileSkippedTaskBody(instructions, node.position) {
+            compileAsyncBody(node.body, instructions)
+        }
+        return CreateAsyncTaskInstruction(
+            entryPointer = compiled.entryPointer,
+            rootFrameId = compiled.rootFrameId,
+            resultTarget = resultTarget,
+            position = node.position,
+        )
+    }
+
+    private fun compileRace(
+        node: NarrativeRaceNode,
+        instructions: MutableList<KatariInstruction>,
+        resultTarget: ResultTarget,
+    ): StartRaceInstruction {
+        require(node.entries.isNotEmpty()) { "${node.position} Katari race block cannot be empty" }
+        val entries = node.entries.map { entry ->
+            compileSkippedTaskBody(instructions, entry.position) {
+                compileRaceEntryBody(entry, instructions)
+            }.let { RaceEntryInstruction(it.entryPointer, it.rootFrameId) }
+        }
+        return StartRaceInstruction(
+            raceId = "__narrative_race_${raceCounter++}",
+            entries = entries,
+            resultTarget = resultTarget,
+            position = node.position,
+        )
+    }
+
+    private fun compileSkippedTaskBody(
+        instructions: MutableList<KatariInstruction>,
+        position: SourcePosition,
+        compileBody: () -> Unit,
+    ): CompiledTaskBody {
+        val skipIndex = instructions.size
+        instructions += JumpInstruction(target = -1, position = position)
+        val entryPointer = instructions.size
+        val rootFrameId = nextFrameIdCounter++
+        lambdaBindings.addLast(mutableMapOf())
+        taskBindings.addLast(mutableMapOf())
+        enumTypeBindings.addLast(mutableMapOf())
+        checkpointScopes.addLast(CheckpointScope(isFunctionBoundary = true))
+        frameIdStack.addLast(rootFrameId)
+        try {
+            compileBody()
+            resolveCurrentCheckpointScope(instructions)
+        } finally {
+            frameIdStack.removeLast()
+            checkpointScopes.removeLast()
+            enumTypeBindings.removeLast()
+            taskBindings.removeLast()
+            lambdaBindings.removeLast()
+        }
+        val endTarget = instructions.size
+        instructions[skipIndex] = JumpInstruction(target = endTarget, position = position)
+        return CompiledTaskBody(entryPointer = entryPointer, rootFrameId = rootFrameId)
+    }
+
+    private fun compileAsyncBody(body: BlockNode, instructions: MutableList<KatariInstruction>) {
+        validateAsyncTaskReturns(body)
+        val trailingReturn = body.statements.lastOrNull() as? ReturnNode
+        if (trailingReturn != null) {
+            compileStatements(body.statements.dropLast(1), instructions)
+            instructions += CompleteTaskInstruction(
+                resultExpression = trailingReturn.value?.let { compileExpression(it, instructions) },
+                position = trailingReturn.position,
+            )
+            return
+        }
+        compileStatements(body.statements, instructions)
+        instructions += CompleteTaskInstruction(position = body.position)
+    }
+
+    private fun validateAsyncTaskReturns(body: BlockNode) {
+        val returnPositions = mutableListOf<ReturnNode>()
+        collectReturnNodes(body, returnPositions)
+        if (returnPositions.isEmpty()) return
+        val lastStatement = body.statements.lastOrNull()
+        require(returnPositions.size == 1 && lastStatement is ReturnNode) {
+            "${body.position} Katari async blocks can only use a single trailing return statement"
+        }
+    }
+
+    private fun compileRaceEntryBody(
+        entry: NarrativeRaceEntryNode,
+        instructions: MutableList<KatariInstruction>,
+    ) {
+        compileExpressionIntoTarget(entry.action, ResultTarget.Slot(nextTemporarySlot()), instructions)
+        instructions += CompleteTaskInstruction(
+            resultExpression = compileExpression(entry.result, instructions),
+            position = entry.position,
+        )
+    }
+
+    private fun resolveCurrentCheckpointScope(instructions: MutableList<KatariInstruction>) {
+        val scope = checkpointScopes.last()
+        val unresolvedToBubble = mutableListOf<UnresolvedJump>()
+        scope.unresolved.forEach { jump ->
+            val target = scope.checkpoints[jump.label]
+            if (target != null) {
+                instructions[jump.instructionIndex] = JumpInstruction(
+                    target = target,
+                    position = instructions[jump.instructionIndex].position,
+                )
+            } else {
+                unresolvedToBubble += jump
+            }
+        }
+        if (unresolvedToBubble.isNotEmpty()) {
+            val missing = unresolvedToBubble.first()
+            throw UnsupportedOperationException(
+                "${missing.position} Narrative jump target `${missing.label}` is not defined in this async task scope"
+            )
+        }
+    }
+
     private fun compileChoose(
         node: NarrativeChooseNode,
         instructions: MutableList<KatariInstruction>,
@@ -512,9 +651,19 @@ class KatariCompiler(
         val targetName = resolveVariableName(node.name)
         bindVariableEnumType(node.name, node.declaredType?.name?.takeIf { it in enumDefinitions })
         when {
+            initialValue is NarrativeAsyncNode -> {
+                bindVariableTask(node.name, true)
+                instructions += compileAsyncTask(
+                    node = initialValue,
+                    instructions = instructions,
+                    resultTarget = ResultTarget.Variable(targetName, declaresLocal = true),
+                )
+                return
+            }
             initialValue is LambdaLiteralNode -> {
                 val lambdaId = registerLambda(initialValue)
                 bindVariableLambda(node.name, if (node.isMutable) null else lambdaId)
+                bindVariableTask(node.name, false)
                 instructions += SetVariableInstruction(
                     name = targetName,
                     expression = LambdaLiteralExpression(lambdaId = lambdaId, position = initialValue.position),
@@ -525,10 +674,20 @@ class KatariCompiler(
             }
             else -> {
                 bindVariableLambda(node.name, null)
+                bindVariableTask(node.name, false)
                 inferEnumTypeFromExpression(initialValue)?.let { bindVariableEnumType(node.name, it) }
             }
         }
         if (initialValue is FunctionCallNode) {
+            val taskControl = compileTaskControlCall(
+                node = initialValue,
+                instructions = instructions,
+                resultTarget = ResultTarget.Variable(targetName, declaresLocal = true),
+            )
+            if (taskControl != null) {
+                instructions += taskControl
+                return
+            }
             val invocation = resolveInlineCapableFunctionInvocation(initialValue, instructions)
             if (invocation != null) {
                 compileUserFunctionInvocation(
@@ -563,7 +722,25 @@ class KatariCompiler(
                     is VariableReferenceNode -> {
                         val targetName = resolveVariableName(target.variableName)
                         bindVariableLambda(target.variableName, null)
+                        bindVariableTask(target.variableName, node.value is NarrativeAsyncNode)
+                        if (node.value is NarrativeAsyncNode) {
+                            instructions += compileAsyncTask(
+                                node = node.value,
+                                instructions = instructions,
+                                resultTarget = ResultTarget.Variable(targetName),
+                            )
+                            return
+                        }
                         if (node.value is FunctionCallNode) {
+                            val taskControl = compileTaskControlCall(
+                                node = node.value,
+                                instructions = instructions,
+                                resultTarget = ResultTarget.Variable(targetName),
+                            )
+                            if (taskControl != null) {
+                                instructions += taskControl
+                                return
+                            }
                             val invocation = resolveInlineCapableFunctionInvocation(node.value, instructions)
                             if (invocation != null) {
                                 compileUserFunctionInvocation(
@@ -692,7 +869,20 @@ class KatariCompiler(
         target: ResultTarget,
         instructions: MutableList<KatariInstruction>,
     ) {
+        if (expression is NarrativeAsyncNode) {
+            instructions += compileAsyncTask(expression, instructions, target)
+            return
+        }
+        if (expression is NarrativeRaceNode) {
+            instructions += compileRace(expression, instructions, target)
+            return
+        }
         if (expression is FunctionCallNode) {
+            val taskControl = compileTaskControlCall(expression, instructions, target)
+            if (taskControl != null) {
+                instructions += taskControl
+                return
+            }
             val invocation = resolveInlineCapableFunctionInvocation(expression, instructions)
             if (invocation != null) {
                 compileUserFunctionInvocation(
@@ -922,6 +1112,49 @@ class KatariCompiler(
         }
     }
 
+    private fun compileTaskControlCall(
+        node: FunctionCallNode,
+        instructions: MutableList<KatariInstruction>,
+        resultTarget: ResultTarget?,
+    ): TaskControlInstruction? {
+        if (node.arguments.isNotEmpty()) return null
+        val navigation = node.function as? NavigationNode ?: return null
+        val operation = when (navigation.member.name) {
+            "start" -> TaskControlOperation.Start
+            "stop" -> TaskControlOperation.Stop
+            "pause" -> TaskControlOperation.Pause
+            "resume" -> TaskControlOperation.Resume
+            "join" -> TaskControlOperation.Join
+            else -> return null
+        }
+        if (!isKatariTaskExpression(navigation.subject)) return null
+        return TaskControlInstruction(
+            task = compileExpression(navigation.subject, instructions),
+            operation = operation,
+            resultTarget = resultTarget,
+            position = node.position,
+        )
+    }
+
+    private fun compileInfixFunctionCallStatement(
+        node: InfixFunctionCallNode,
+        instructions: MutableList<KatariInstruction>,
+    ) {
+        when (node.functionName) {
+            "is", "!is", "in", "!in", "to" -> throw UnsupportedOperationException(
+                "Infix operator `${node.functionName}` cannot be used as a Katari statement"
+            )
+            else -> instructions += CallFunctionInstruction(
+                functionId = node.functionName,
+                arguments = listOf(
+                    compileExpression(node.node1, instructions),
+                    compileExpression(node.node2, instructions),
+                ),
+                position = node.position,
+            )
+        }
+    }
+
     private fun compileUserFunctionInvocation(
         declaration: FunctionDeclarationNode,
         callPosition: SourcePosition,
@@ -1086,11 +1319,13 @@ class KatariCompiler(
         block: () -> Unit,
     ) {
         lambdaBindings.addLast((shadowedNames.associateWith { null } + lambdaParameterBindings).toMutableMap())
+        taskBindings.addLast(shadowedNames.associateWith { false }.toMutableMap())
         enumTypeBindings.addLast((shadowedNames.associateWith { null } + enumParameterBindings).toMutableMap())
         try {
             block()
         } finally {
             enumTypeBindings.removeLast()
+            taskBindings.removeLast()
             lambdaBindings.removeLast()
         }
     }
@@ -1183,6 +1418,13 @@ class KatariCompiler(
             }
             is IfNode -> compileIfExpression(expression, instructions)
             is FunctionCallNode -> {
+                val taskControl = compileTaskControlCall(expression, instructions, ResultTarget.Slot(nextTemporarySlot()))
+                if (taskControl != null) {
+                    instructions += taskControl
+                    val slot = (taskControl.resultTarget as? ResultTarget.Slot)
+                        ?: throw IllegalStateException("Task control expression result target is missing")
+                    return SlotExpression(slot.slot, position = expression.position)
+                }
                 compileEnumCompanionCall(expression, instructions)?.let { return it }
                 val invocation = resolveInlineCapableFunctionInvocation(expression, instructions)
                 if (invocation != null) {
@@ -1205,7 +1447,17 @@ class KatariCompiler(
                 )
                 SlotExpression(slot, position = expression.position)
             }
-            is NavigationNode -> compileEnumNavigationExpression(expression, instructions)
+            is NarrativeAsyncNode -> {
+                val slot = nextTemporarySlot()
+                instructions += compileAsyncTask(expression, instructions, ResultTarget.Slot(slot))
+                SlotExpression(slot, position = expression.position)
+            }
+            is NarrativeRaceNode -> {
+                val slot = nextTemporarySlot()
+                instructions += compileRace(expression, instructions, ResultTarget.Slot(slot))
+                SlotExpression(slot, position = expression.position)
+            }
+            is NavigationNode -> compileEnumNavigationExpression(expression)
                 ?: compileEnumValuePropertyExpression(expression, instructions)
                 ?: compileExternalExpressionCall(
                     functionId = expression.member.name,
@@ -1315,10 +1567,7 @@ class KatariCompiler(
         return SlotExpression(slot, position = position)
     }
 
-    private fun compileEnumNavigationExpression(
-        node: NavigationNode,
-        instructions: MutableList<KatariInstruction>,
-    ): KatariExpression? {
+    private fun compileEnumNavigationExpression(node: NavigationNode): KatariExpression? {
         val subject = node.subject
         if (subject is VariableReferenceNode) {
             val enumDefinition = enumDefinitions[resolveTypeName(subject.variableName)] ?: return null
@@ -1345,7 +1594,7 @@ class KatariCompiler(
         instructions: MutableList<KatariInstruction>,
     ): KatariExpression? {
         val subjectExpression = when (val subject = node.subject) {
-            is NavigationNode -> compileEnumNavigationExpression(subject, instructions)
+            is NavigationNode -> compileEnumNavigationExpression(subject)
             is FunctionCallNode -> compileEnumCompanionCall(subject, instructions)
             is VariableReferenceNode -> resolveEnumTypeBinding(subject.variableName)?.let {
                 VariableExpression(resolveVariableName(subject.variableName), position = subject.position)
@@ -1491,6 +1740,12 @@ class KatariCompiler(
         currentScope[name] = lambdaId
     }
 
+    private fun bindVariableTask(name: String, isTask: Boolean) {
+        val currentScope = taskBindings.lastOrNull()
+            ?: throw IllegalStateException("Task binding scope is not initialized")
+        currentScope[name] = isTask
+    }
+
     private fun bindVariableEnumType(name: String, typeId: String?) {
         val currentScope = enumTypeBindings.lastOrNull()
             ?: throw IllegalStateException("Enum binding scope is not initialized")
@@ -1504,6 +1759,21 @@ class KatariCompiler(
             }
         }
         return null
+    }
+
+    private fun isKatariTaskExpression(expression: ASTNode): Boolean {
+        return when (expression) {
+            is NarrativeAsyncNode -> true
+            is VariableReferenceNode -> {
+                taskBindings.toList().asReversed().forEach { scope ->
+                    if (expression.variableName in scope) {
+                        return scope.getValue(expression.variableName)
+                    }
+                }
+                false
+            }
+            else -> false
+        }
     }
 
     private fun resolveEnumTypeBinding(name: String): String? {
@@ -1717,6 +1987,11 @@ private data class CompiledChooseEntry(
     val entry: NarrativeChooseEntryNode,
     val argumentExpression: KatariExpression,
     val selectedIdExpression: KatariExpression,
+)
+
+private data class CompiledTaskBody(
+    val entryPointer: Int,
+    val rootFrameId: Int,
 )
 
 private data class ResolvedUserFunctionInvocation(

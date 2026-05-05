@@ -43,3 +43,34 @@ data class NarrativeChooseEntryNode(
         }
     }
 }
+
+data class NarrativeAsyncNode(
+    override val position: SourcePosition,
+    val body: BlockNode,
+) : ASTNode {
+    override fun toMermaid(): String {
+        val self = "${generateId()}[\"Narrative Async\"]"
+        return "$self--body-->${body.toMermaid()}"
+    }
+}
+
+data class NarrativeRaceNode(
+    override val position: SourcePosition,
+    val entries: List<NarrativeRaceEntryNode>,
+) : ASTNode {
+    override fun toMermaid(): String {
+        val self = "${generateId()}[\"Narrative Race\"]"
+        return entries.withIndex().joinToString("\n") { "$self-- \"entry[${it.index}]\" -->${it.value.toMermaid()}" }
+    }
+}
+
+data class NarrativeRaceEntryNode(
+    override val position: SourcePosition,
+    val action: ASTNode,
+    val result: ASTNode,
+) : ASTNode {
+    override fun toMermaid(): String {
+        val self = "${generateId()}[\"Narrative Race Entry\"]"
+        return "$self--action-->${action.toMermaid()}\n$self--result-->${result.toMermaid()}"
+    }
+}

@@ -139,3 +139,31 @@ internal class EnumEntriesIteratorValue(
     val entries: List<NarrativeEnumValue>,
     var index: Int = 0,
 )
+
+class KatariTaskValue(
+    val taskId: String,
+    val entryPointer: Int,
+    val rootFrameId: Int,
+    val capturedVariables: Map<String, RuntimeValue>,
+    var started: Boolean,
+    private val symbolTable: SymbolTable,
+) : RuntimeValue {
+    override fun type(): DataType = ObjectType(
+        clazz = syntheticEnumClass(KATARI_TASK_TYPE_ID, symbolTable),
+        arguments = emptyList(),
+        isNullable = false,
+        superTypes = emptyList(),
+    )
+
+    override fun convertToString(): String = "KatariTask($taskId)"
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is KatariTaskValue) return false
+        return taskId == other.taskId
+    }
+
+    override fun hashCode(): Int = taskId.hashCode()
+}
+
+const val KATARI_TASK_TYPE_ID: String = "KatariTask"

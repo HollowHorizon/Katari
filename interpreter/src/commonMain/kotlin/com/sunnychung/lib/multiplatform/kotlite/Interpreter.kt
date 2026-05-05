@@ -74,7 +74,10 @@ import com.sunnychung.lib.multiplatform.kotlite.model.LongValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeAsyncNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
@@ -201,6 +204,9 @@ open class Interpreter(val rootNode: ASTNode, val executionEnvironment: Executio
             is NarrativeJumpNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
             is NarrativeChooseNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
             is NarrativeChooseEntryNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
+            is NarrativeAsyncNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
+            is NarrativeRaceNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
+            is NarrativeRaceEntryNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
             is KatariImportNode -> throw UnsupportedOperationException("Katari import node must be resolved before interpretation")
         }
     }

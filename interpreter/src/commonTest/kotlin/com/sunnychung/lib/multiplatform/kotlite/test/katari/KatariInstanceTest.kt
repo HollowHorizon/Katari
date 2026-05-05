@@ -1108,6 +1108,205 @@ class KatariInstanceTest {
     }
 
     @Test
+    fun asyncTaskRunsAlongsideMainBranchAndJoinReturnsResult() = runTest {
+        val events = mutableListOf<String>()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val task = async {
+                        "async"
+                        return "result"
+                    }
+                    task.start()
+                    "main"
+                    val result = task.join()
+                    "joined ${'$'}result"
+                """.trimIndent(),
+            ),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(listOf("main", "async", "joined result"), events)
+    }
+
+    @Test
+    fun raceReturnsFirstCompletedBranchAndStopsTheRest() = runTest {
+        val events = mutableListOf<String>()
+        val gate = GateCallable()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+            register(gate)
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val result = race {
+                        gate("slow") -> "slow"
+                        gate("fast") -> "fast"
+                    }
+                    "winner ${'$'}result"
+                """.trimIndent(),
+                bindings = bindings,
+            ),
+            executionEnvironment = bindings.executionEnvironment,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        gate.resume("fast")
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(listOf("winner fast"), events)
+        assertTrue(instance.currentState().tasks.any { it.id.endsWith("_0") && it.status == TaskStatus.Stopped })
+    }
+
+    @Test
+    fun snapshotRestoresWaitingJoinAndAsyncTaskSuspension() = runTest {
+        val events = mutableListOf<String>()
+        val gate = GateCallable()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+            register(gate)
+        }
+        val program = KatariNarrativeProgram(
+            filename = "<Narrative>",
+            code = """
+                val task = async {
+                    gate("async")
+                    return "done"
+                }
+                task.start()
+                val result = task.join()
+                "joined ${'$'}result"
+            """.trimIndent(),
+            bindings = bindings,
+        )
+        val codec = StateSnapshotCodec(executionEnvironment = bindings.executionEnvironment)
+        val instance = KatariInstance(
+            program = program,
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        val snapshot = instance.serializeState()
+        instance.cancel()
+
+        val restored = KatariInstance(
+            program = program,
+            initialState = codec.restore(snapshot),
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+        restored.start()
+        advanceUntilIdle()
+        gate.resume("async")
+        advanceUntilIdle()
+        restored.join()
+
+        assertEquals(listOf("joined done"), events)
+    }
+
+    @Test
+    fun snapshotRestoresAsyncTaskIdCounterBeforeCreatingAnotherTask() = runTest {
+        val events = mutableListOf<String>()
+        val gate = GateCallable()
+        val host = object : NarrativeHost {
+            override fun narrate(text: String, resume: () -> Unit) {
+                events += text
+                resume()
+            }
+            override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
+            override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
+        }
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+            register(gate)
+        }
+        val program = KatariNarrativeProgram(
+            filename = "<Narrative>",
+            code = """
+                val task1 = async {
+                    return "first"
+                }
+                gate("snapshot")
+                val task2 = async {
+                    return "second"
+                }
+                task1.start()
+                task2.start()
+                val result1 = task1.join()
+                val result2 = task2.join()
+                "${'$'}result1 ${'$'}result2"
+            """.trimIndent(),
+            bindings = bindings,
+        )
+        val codec = StateSnapshotCodec(executionEnvironment = bindings.executionEnvironment)
+        val instance = KatariInstance(
+            program = program,
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        val snapshot = instance.serializeState()
+        instance.cancel()
+
+        val restored = KatariInstance(
+            program = program,
+            initialState = codec.restore(snapshot),
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+        restored.start()
+        advanceUntilIdle()
+        gate.resume("snapshot")
+        advanceUntilIdle()
+        restored.join()
+
+        assertEquals(listOf("first second"), events)
+    }
+
+    @Test
     fun jumpCanTargetCheckpointInParentScopeWithinSameFunction() = runTest {
         val events = mutableListOf<String>()
         val host = object : NarrativeHost {
@@ -1407,5 +1606,45 @@ object PromptFlagFunction : NarrativeCallable {
         resume: (FunctionResponse?) -> Unit,
     ) {
         resume(null)
+    }
+}
+
+class GateCallable : NarrativeCallable {
+    private val pending = linkedMapOf<String, (FunctionResponse?) -> Unit>()
+
+    override val id: String = "gate"
+    override val receiverType: String? = null
+    override val returnType: String = "Unit"
+    override val typeParameters: List<TypeParameter> = emptyList()
+    override val valueParameters: List<CustomFunctionParameter> = listOf(
+        CustomFunctionParameter("name", "String"),
+    )
+
+    override suspend fun startCall(
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        return NarrativeCallResult.Suspended
+    }
+
+    override suspend fun resumeCall(
+        arguments: List<RuntimeValue>,
+        response: FunctionResponse?,
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        return NarrativeCallResult.Returned(NullValue)
+    }
+
+    override fun dispatch(
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallDispatchContext,
+        resume: (FunctionResponse?) -> Unit,
+    ) {
+        val name = (arguments.single() as StringValue).value
+        pending[name] = resume
+    }
+
+    fun resume(name: String) {
+        pending.remove(name)?.invoke(null)
     }
 }

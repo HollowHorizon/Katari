@@ -65,7 +65,10 @@ import com.sunnychung.lib.multiplatform.kotlite.model.LongNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeAsyncNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NothingType
 import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
@@ -356,6 +359,9 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
             is NarrativeJumpNode -> {}
             is NarrativeChooseNode -> {}
             is NarrativeChooseEntryNode -> {}
+            is NarrativeAsyncNode -> this.visit(modifier = modifier)
+            is NarrativeRaceNode -> this.visit(modifier = modifier)
+            is NarrativeRaceEntryNode -> this.visit(modifier = modifier)
             is KatariImportNode -> {}
         }
     }
@@ -2599,6 +2605,21 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
         )
     }
 
+    fun NarrativeAsyncNode.visit(modifier: Modifier = Modifier()) {
+        pushScope("<async>", ScopeType.Function)
+        body.visit(modifier = modifier)
+        popScope()
+    }
+
+    fun NarrativeRaceNode.visit(modifier: Modifier = Modifier()) {
+        entries.forEach { it.visit(modifier = modifier) }
+    }
+
+    fun NarrativeRaceEntryNode.visit(modifier: Modifier = Modifier()) {
+        action.visit(modifier = modifier)
+        result.visit(modifier = modifier)
+    }
+
     fun analyze() = rootNode.visit()
 
     ////////////////////////////////////
@@ -2663,6 +2684,9 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
             is NarrativeJumpNode -> typeRegistry["Unit"]!!
             is NarrativeChooseNode -> typeRegistry["Unit"]!!
             is NarrativeChooseEntryNode -> typeRegistry["Unit"]!!
+            is NarrativeAsyncNode -> TypeNode(SourcePosition.NONE, "KatariTask", null, false)
+            is NarrativeRaceNode -> typeRegistry["Any?"]!!
+            is NarrativeRaceEntryNode -> typeRegistry["Unit"]!!
             is KatariImportNode -> typeRegistry["Unit"]!!
     }
 

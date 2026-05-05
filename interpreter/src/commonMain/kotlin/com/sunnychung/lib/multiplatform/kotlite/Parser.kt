@@ -1066,6 +1066,7 @@ open class Parser(protected val lexer: Lexer) {
      *     | jumpExpression
      */
     fun primaryExpression(label: LabelNode? = null): ASTNode {
+        customPrimaryExpressionOrNull(label)?.let { return it }
         val currentToken = currentToken
         when (currentToken.type) {
             TokenType.Operator -> {
@@ -1116,6 +1117,8 @@ open class Parser(protected val lexer: Lexer) {
         }
         throw UnexpectedTokenException(currentToken)
     }
+
+    protected open fun customPrimaryExpressionOrNull(label: LabelNode?): ASTNode? = null
 
     /**
      * disjunction:

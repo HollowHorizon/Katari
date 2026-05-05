@@ -37,7 +37,10 @@ import com.sunnychung.lib.multiplatform.kotlite.model.LongNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeAsyncNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
 import com.sunnychung.lib.multiplatform.kotlite.model.PropertyAccessorsNode
@@ -133,6 +136,9 @@ open class CodeGenerator(protected val node: ASTNode, val isPrintDebugInfo: Bool
             is NarrativeJumpNode -> this.generate()
             is NarrativeChooseNode -> this.generate()
             is NarrativeChooseEntryNode -> this.generate()
+            is NarrativeAsyncNode -> this.generate()
+            is NarrativeRaceNode -> this.generate()
+            is NarrativeRaceEntryNode -> this.generate()
             is KatariImportNode -> ""
     }
 
@@ -400,4 +406,21 @@ open class CodeGenerator(protected val node: ASTNode, val isPrintDebugInfo: Bool
         append(" -> ")
         append(action.generate())
     }
+
+    protected fun NarrativeAsyncNode.generate() = "async ${body.generate()}"
+
+    protected fun NarrativeRaceNode.generate() = buildString {
+        append("race {\n")
+        ++indentLevel
+        entries.forEach {
+            append(indent())
+            append(it.generate())
+            append("\n")
+        }
+        --indentLevel
+        append(indent())
+        append("}")
+    }
+
+    protected fun NarrativeRaceEntryNode.generate() = "${action.generate()} -> ${result.generate()}"
 }

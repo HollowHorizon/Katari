@@ -15,7 +15,10 @@ import com.sunnychung.lib.multiplatform.kotlite.model.KatariScriptImportNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeAsyncNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ScopeType
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
@@ -62,6 +65,47 @@ class KatariParser(
             }
         }
         return null
+    }
+
+    override fun customPrimaryExpressionOrNull(label: com.sunnychung.lib.multiplatform.kotlite.model.LabelNode?): ASTNode? {
+        if (currentToken.type != TokenType.Identifier) {
+            return null
+        }
+        return when (currentToken.value as String) {
+            "async" -> narrativeAsync()
+            "race" -> narrativeRace()
+            else -> null
+        }
+    }
+
+    private fun narrativeAsync(): NarrativeAsyncNode {
+        val token = eat(TokenType.Identifier, "async")
+        repeatedNL()
+        val body = block(ScopeType.Function)
+        return NarrativeAsyncNode(position = token.position, body = body)
+    }
+
+    private fun narrativeRace(): NarrativeRaceNode {
+        val token = eat(TokenType.Identifier, "race")
+        repeatedNL()
+        eat(TokenType.Symbol, "{")
+        repeatedNL()
+        val entries = mutableListOf<NarrativeRaceEntryNode>()
+        while (!isCurrentTokenExcludingNL(TokenType.Symbol, "}")) {
+            val action = expression()
+            repeatedNL()
+            eat(TokenType.Symbol, "->")
+            repeatedNL()
+            val result = expression()
+            entries += NarrativeRaceEntryNode(position = action.position, action = action, result = result)
+            if (currentToken.type in setOf(TokenType.Semicolon, TokenType.NewLine)) {
+                semis()
+            } else {
+                repeatedNL()
+            }
+        }
+        eat(TokenType.Symbol, "}")
+        return NarrativeRaceNode(position = token.position, entries = entries)
     }
 
     private fun katariImport(): KatariImportNode {

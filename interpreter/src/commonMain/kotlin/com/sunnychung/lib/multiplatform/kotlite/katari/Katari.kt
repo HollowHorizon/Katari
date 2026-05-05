@@ -7,6 +7,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.ASTNode
 import com.sunnychung.lib.multiplatform.kotlite.model.AssignmentNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ClassMemberReferenceNode
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
 import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallArgumentNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
@@ -15,6 +16,9 @@ import com.sunnychung.lib.multiplatform.kotlite.model.IfNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IndexOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
+import com.sunnychung.lib.multiplatform.kotlite.model.KATARI_TASK_TYPE_ID
+import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ProvidedClassDefinition
 import com.sunnychung.lib.multiplatform.kotlite.model.PropertyDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ReturnNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
@@ -32,6 +36,7 @@ fun KatariNarrativeProgram(
     val ast = KatariParser(Lexer(filename = filename, code = code, isParseSingleQuotedString = true)).narrativeScript()
     val imports = resolveKatariImports(filename, ast, sourceProvider)
     val semanticScript = imports.script.lowerNarrativeStringStatements(imports.scriptNamespaces)
+    bindings.executionEnvironment.installKatariTaskSemanticTypes()
     SemanticAnalyzer(semanticScript, bindings.executionEnvironment).analyze()
     val interpreter = KotliteInterpreter(
         filename = "<NarrativeInline>",
@@ -45,6 +50,40 @@ fun KatariNarrativeProgram(
         nameAliases = bindings.importAliases + imports.nameAliases,
         scriptNamespaces = imports.scriptNamespaces,
     ).compile(imports.script)
+}
+
+private fun com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment.installKatariTaskSemanticTypes() {
+    if (findProvidedClass(KATARI_TASK_TYPE_ID) == null) {
+        registerClass(
+            ProvidedClassDefinition(
+                fullQualifiedName = KATARI_TASK_TYPE_ID,
+                typeParameters = emptyList(),
+                isInstanceCreationAllowed = false,
+                primaryConstructorParameters = emptyList(),
+                constructInstance = { _, _, _ -> throw UnsupportedOperationException("KatariTask is created by async") },
+                position = com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition.BUILTIN,
+                functions = listOf(
+                    katariTaskSemanticFunction("start", "Unit"),
+                    katariTaskSemanticFunction("stop", "Unit"),
+                    katariTaskSemanticFunction("pause", "Unit"),
+                    katariTaskSemanticFunction("resume", "Unit"),
+                    katariTaskSemanticFunction("join", "Any?"),
+                ),
+            )
+        )
+    }
+}
+
+private fun katariTaskSemanticFunction(name: String, returnType: String): CustomFunctionDefinition {
+    return CustomFunctionDefinition(
+        position = com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition.BUILTIN,
+        receiverType = KATARI_TASK_TYPE_ID,
+        functionName = name,
+        returnType = returnType,
+        parameterTypes = emptyList(),
+        modifiers = emptySet(),
+        executable = { _, _, _, _ -> NullValue },
+    )
 }
 
 private fun ScriptNode.lowerNarrativeStringStatements(scriptNamespaces: Map<String, Set<String>>): ScriptNode {
@@ -91,6 +130,17 @@ private fun ASTNode.lowerNarrativeExpression(scriptNamespaces: Map<String, Set<S
         )
         is PropertyDeclarationNode -> copy(
             initialValue = initialValue?.lowerNarrativeExpression(scriptNamespaces),
+        )
+        is com.sunnychung.lib.multiplatform.kotlite.model.NarrativeAsyncNode -> copy(
+            body = body.lowerNarrativeStringStatements(scriptNamespaces),
+        )
+        is com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceNode -> copy(
+            entries = entries.map { entry ->
+                entry.copy(
+                    action = entry.action.lowerNarrativeExpression(scriptNamespaces),
+                    result = entry.result.lowerNarrativeExpression(scriptNamespaces),
+                )
+            },
         )
         is ReturnNode -> copy(
             value = value?.lowerNarrativeExpression(scriptNamespaces),

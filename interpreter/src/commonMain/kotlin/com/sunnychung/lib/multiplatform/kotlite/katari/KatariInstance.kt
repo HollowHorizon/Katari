@@ -9,6 +9,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionResponse
 import com.sunnychung.lib.multiplatform.kotlite.model.GlobalProperty
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
+import com.sunnychung.lib.multiplatform.kotlite.model.KatariTaskValue
 import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallContext
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallDispatchContext
@@ -54,6 +55,7 @@ class KatariInstance(
     private val completion = CompletableDeferred<Unit>()
     private val inFlightTasks = mutableSetOf<String>()
     private var currentState: KatariState = initialState
+    private var taskIdCounter = nextTaskIdCounter(initialState)
     private var executionJob: Job? = null
     private var cancelled = false
 
@@ -117,6 +119,7 @@ class KatariInstance(
             var pendingSuspensions: List<FunctionDispatchRequest> = emptyList()
             var shouldReturn = false
             mutex.withLock {
+                wakeWaitingTasksLocked()
                 val taskIndex = currentState.tasks.indexOfFirst { it.status == TaskStatus.Ready }
                 if (taskIndex < 0) {
                     pendingSuspensions = collectUndispatchedSuspensionsLocked()
@@ -129,7 +132,7 @@ class KatariInstance(
 
                 val task = normalizeTask(currentState.tasks[taskIndex])
                 if (task.instructionPointer >= program.instructions.size) {
-                    currentState = currentState.completeTask(taskIndex)
+                    currentState = currentState.completeTask(taskIndex, null)
                 } else {
                     val instruction = program.instructions[task.instructionPointer]
                     try {
@@ -180,7 +183,23 @@ class KatariInstance(
                                 )
                             }
                             is EndInstruction -> {
-                                currentState = currentState.completeTask(taskIndex)
+                                currentState = currentState.completeTask(taskIndex, null)
+                            }
+                            is CreateAsyncTaskInstruction -> {
+                                currentState = currentState.updateTask(
+                                    index = taskIndex,
+                                    task = applyCreateAsyncTaskInstruction(task, instruction),
+                                )
+                            }
+                            is TaskControlInstruction -> {
+                                currentState = applyTaskControlInstruction(taskIndex, task, instruction)
+                            }
+                            is StartRaceInstruction -> {
+                                currentState = applyStartRaceInstruction(taskIndex, task, instruction)
+                            }
+                            is CompleteTaskInstruction -> {
+                                val result = instruction.resultExpression?.let { evaluateExpression(currentState, task, it) }
+                                currentState = currentState.completeTask(taskIndex, result)
                             }
                             is EnterCallFrameInstruction -> {
                                 val nextFrame = CallFrameState(
@@ -239,7 +258,6 @@ class KatariInstance(
             }
             nextEffectToDispatch?.let { request ->
                 dispatchSuspendedCall(request)
-                return
             }
         }
     }
@@ -346,12 +364,16 @@ class KatariInstance(
         mutex.withLock {
             inFlightTasks -= taskId
             val taskIndex = currentState.tasks.indexOfFirst {
-                it.id == taskId && it.status is TaskStatus.SuspendedCall
+                it.id == taskId && (
+                    it.status is TaskStatus.SuspendedCall ||
+                        (it.status as? TaskStatus.Paused)?.innerStatus is TaskStatus.SuspendedCall
+                    )
             }
             if (taskIndex < 0 || cancelled) return
 
             val task = normalizeTask(currentState.tasks[taskIndex])
-            val status = task.status as TaskStatus.SuspendedCall
+            val pausedStatus = task.status as? TaskStatus.Paused
+            val status = (pausedStatus?.innerStatus ?: task.status) as TaskStatus.SuspendedCall
             val instruction = resolveSuspendedCallInstruction(task)
             val resolved = resolveNarrativeCall(instruction.functionId, instruction, task)
             val referencedSlots = collectReferencedSlots(instruction.arguments)
@@ -364,17 +386,18 @@ class KatariInstance(
                     context = KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task),
                 )) {
                     is NarrativeCallResult.Returned -> {
+                        val resumedTask = cleanupSlots(
+                            task = applyResultTarget(
+                                task = task.copy(status = TaskStatus.Ready),
+                                resultTarget = status.resultTarget,
+                                value = result.value,
+                                nextInstructionPointer = status.nextInstructionPointer,
+                            ),
+                            slotsToRemove = referencedSlots,
+                        )
                         currentState = currentState.updateTask(
                             index = taskIndex,
-                            task = cleanupSlots(
-                                task = applyResultTarget(
-                                    task = task.copy(status = TaskStatus.Ready),
-                                    resultTarget = status.resultTarget,
-                                    value = result.value,
-                                    nextInstructionPointer = status.nextInstructionPointer,
-                                ),
-                                slotsToRemove = referencedSlots,
-                            ),
+                            task = if (pausedStatus == null) resumedTask else resumedTask.copy(status = TaskStatus.Paused(TaskStatus.Ready)),
                         )
                     }
                     NarrativeCallResult.Suspended -> {
@@ -440,6 +463,191 @@ class KatariInstance(
                 slots = if (instruction.expression is SlotExpression) task.slots - instruction.expression.slot else task.slots,
             )
         )
+    }
+
+    private fun applyCreateAsyncTaskInstruction(
+        task: TaskState,
+        instruction: CreateAsyncTaskInstruction,
+    ): TaskState {
+        val taskValue = KatariTaskValue(
+            taskId = allocateTaskId(),
+            entryPointer = instruction.entryPointer,
+            rootFrameId = instruction.rootFrameId,
+            capturedVariables = visibleLocalVariables(task),
+            started = false,
+            symbolTable = snapshotCodec.symbolTable(),
+        )
+        return applyResultTarget(
+            task = task,
+            resultTarget = instruction.resultTarget,
+            value = taskValue,
+            nextInstructionPointer = task.instructionPointer + 1,
+        )
+    }
+
+    private fun applyTaskControlInstruction(
+        taskIndex: Int,
+        task: TaskState,
+        instruction: TaskControlInstruction,
+    ): KatariState {
+        val taskValue = evaluateExpression(currentState, task, instruction.task) as? KatariTaskValue
+            ?: throw IllegalArgumentException("Katari task operation `${instruction.operation}` expects KatariTask receiver")
+        return when (instruction.operation) {
+            TaskControlOperation.Start -> {
+                startAsyncTask(taskValue)
+                currentState.updateTask(
+                    index = taskIndex,
+                    task = applyResultTarget(task, instruction.resultTarget, NullValue, task.instructionPointer + 1),
+                )
+            }
+            TaskControlOperation.Stop -> {
+                stopTask(taskValue.taskId)
+                currentState.updateTask(
+                    index = taskIndex,
+                    task = applyResultTarget(task, instruction.resultTarget, NullValue, task.instructionPointer + 1),
+                )
+            }
+            TaskControlOperation.Pause -> {
+                pauseTask(taskValue.taskId)
+                currentState.updateTask(
+                    index = taskIndex,
+                    task = applyResultTarget(task, instruction.resultTarget, NullValue, task.instructionPointer + 1),
+                )
+            }
+            TaskControlOperation.Resume -> {
+                resumeTask(taskValue.taskId)
+                currentState.updateTask(
+                    index = taskIndex,
+                    task = applyResultTarget(task, instruction.resultTarget, NullValue, task.instructionPointer + 1),
+                )
+            }
+            TaskControlOperation.Join -> {
+                val joined = currentState.tasks.firstOrNull { it.id == taskValue.taskId }
+                if (joined != null && isTaskFinal(joined.status)) {
+                    val value = joined.result ?: NullValue
+                    currentState.updateTask(
+                        index = taskIndex,
+                        task = applyResultTarget(task, instruction.resultTarget, value, task.instructionPointer + 1),
+                    )
+                } else {
+                    currentState.updateTask(
+                        index = taskIndex,
+                        task = task.copy(
+                            status = TaskStatus.WaitingTaskJoin(
+                                taskId = taskValue.taskId,
+                                resultTarget = instruction.resultTarget,
+                                nextInstructionPointer = task.instructionPointer + 1,
+                            )
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun applyStartRaceInstruction(
+        taskIndex: Int,
+        task: TaskState,
+        instruction: StartRaceInstruction,
+    ): KatariState {
+        val branchTasks = instruction.entries.mapIndexed { index, entry ->
+            val capturedVariables = visibleLocalVariables(task)
+            val rootFrame = CallFrameState(
+                id = entry.rootFrameId,
+                functionId = ROOT_CALL_FRAME_FUNCTION_ID,
+                lexicalParentFrameId = null,
+                localVariables = capturedVariables,
+            )
+            TaskState(
+                id = "${instruction.raceId}_$index",
+                instructionPointer = entry.entryPointer,
+                localVariables = capturedVariables,
+                callFrames = listOf(rootFrame),
+                nextCallFrameId = maxOf(entry.rootFrameId + 1, ROOT_CALL_FRAME_ID + 1),
+                status = TaskStatus.Ready,
+                raceGroupId = instruction.raceId,
+            )
+        }
+        return currentState.copy(
+            tasks = currentState.tasks.mapIndexed { index, currentTask ->
+                if (index == taskIndex) {
+                    syncTopLocals(
+                        task.copy(
+                            status = TaskStatus.WaitingRace(
+                                raceId = instruction.raceId,
+                                resultTarget = instruction.resultTarget,
+                                nextInstructionPointer = task.instructionPointer + 1,
+                            )
+                        )
+                    )
+                } else {
+                    currentTask
+                }
+            } + branchTasks
+        )
+    }
+
+    private fun startAsyncTask(taskValue: KatariTaskValue) {
+        if (currentState.tasks.any { it.id == taskValue.taskId }) {
+            taskValue.started = true
+            return
+        }
+        val capturedVariables = taskValue.capturedVariables.toMap()
+        val rootFrame = CallFrameState(
+            id = taskValue.rootFrameId,
+            functionId = ROOT_CALL_FRAME_FUNCTION_ID,
+            lexicalParentFrameId = null,
+            localVariables = capturedVariables,
+        )
+        currentState = currentState.copy(
+            tasks = currentState.tasks + TaskState(
+                id = taskValue.taskId,
+                instructionPointer = taskValue.entryPointer,
+                localVariables = capturedVariables,
+                callFrames = listOf(rootFrame),
+                nextCallFrameId = maxOf(taskValue.rootFrameId + 1, ROOT_CALL_FRAME_ID + 1),
+                status = TaskStatus.Ready,
+            )
+        )
+        taskValue.started = true
+    }
+
+    private fun stopTask(taskId: String) {
+        val index = currentState.tasks.indexOfFirst { it.id == taskId }
+        if (index < 0) return
+        inFlightTasks -= taskId
+        currentState = currentState.updateTask(
+            index = index,
+            task = currentState.tasks[index].copy(status = TaskStatus.Stopped),
+        )
+    }
+
+    private fun pauseTask(taskId: String) {
+        val index = currentState.tasks.indexOfFirst { it.id == taskId }
+        if (index < 0) return
+        val target = currentState.tasks[index]
+        if (target.status is TaskStatus.Paused || isTaskFinal(target.status)) return
+        currentState = currentState.updateTask(
+            index = index,
+            task = target.copy(status = TaskStatus.Paused(target.status)),
+        )
+    }
+
+    private fun resumeTask(taskId: String) {
+        val index = currentState.tasks.indexOfFirst { it.id == taskId }
+        if (index < 0) return
+        val paused = currentState.tasks[index].status as? TaskStatus.Paused ?: return
+        currentState = currentState.updateTask(
+            index = index,
+            task = currentState.tasks[index].copy(status = paused.innerStatus),
+        )
+    }
+
+    private fun allocateTaskId(): String {
+        while ("__katari_task_$taskIdCounter" in collectKnownTaskIds(currentState)) {
+            ++taskIdCounter
+        }
+        return "__katari_task_${taskIdCounter++}"
     }
 
     private fun applyResultTarget(
@@ -533,6 +741,44 @@ class KatariInstance(
     private fun resolveSuspendedCallInstruction(task: TaskState): CallFunctionInstruction {
         return program.instructions.getOrNull(task.instructionPointer) as? CallFunctionInstruction
             ?: throw IllegalStateException("Task `${task.id}` is suspended at instruction ${task.instructionPointer}, but no function call exists there")
+    }
+
+    private fun wakeWaitingTasksLocked() {
+        currentState.tasks.forEachIndexed { index, task ->
+            when (val status = task.status) {
+                is TaskStatus.WaitingTaskJoin -> {
+                    val joined = currentState.tasks.firstOrNull { it.id == status.taskId } ?: return@forEachIndexed
+                    if (!isTaskFinal(joined.status)) return@forEachIndexed
+                    val nextTask = if (joined.status is TaskStatus.Failed) {
+                        task.copy(status = TaskStatus.Failed(joined.status.message))
+                    } else {
+                        applyResultTarget(
+                            task = task.copy(status = TaskStatus.Ready),
+                            resultTarget = status.resultTarget,
+                            value = joined.result ?: NullValue,
+                            nextInstructionPointer = status.nextInstructionPointer,
+                        )
+                    }
+                    currentState = currentState.updateTask(index, nextTask)
+                }
+                is TaskStatus.WaitingRace -> {
+                    val winner = currentState.tasks.firstOrNull {
+                        it.raceGroupId == status.raceId && it.status == TaskStatus.Completed
+                    } ?: return@forEachIndexed
+                    val nextTask = applyResultTarget(
+                        task = task.copy(status = TaskStatus.Ready),
+                        resultTarget = status.resultTarget,
+                        value = winner.result ?: NullValue,
+                        nextInstructionPointer = status.nextInstructionPointer,
+                    )
+                    currentState.tasks
+                        .filter { it.raceGroupId == status.raceId && !isTaskFinal(it.status) }
+                        .forEach { stopTask(it.id) }
+                    currentState = currentState.updateTask(index, nextTask)
+                }
+                else -> Unit
+            }
+        }
     }
 
     private fun evaluateExpression(
@@ -744,6 +990,17 @@ class KatariInstance(
         return task.callFrames.firstOrNull { it.id == frameId }
     }
 
+    private fun visibleLocalVariables(task: TaskState): Map<String, RuntimeValue> {
+        val variables = linkedMapOf<String, RuntimeValue>()
+        fun collect(frameId: Int) {
+            val frame = findFrameById(task, frameId) ?: return
+            frame.lexicalParentFrameId?.let { collect(it) }
+            variables += frame.localVariables
+        }
+        collect(currentCallFrame(task).id)
+        return variables
+    }
+
     private fun applyExitCallFrameInstruction(
         task: TaskState,
         instruction: ExitCallFrameInstruction,
@@ -827,12 +1084,12 @@ class KatariInstance(
         })
     }
 
-    private fun KatariState.completeTask(index: Int): KatariState {
-        return updateTask(index, tasks[index].copy(status = TaskStatus.Completed))
+    private fun KatariState.completeTask(index: Int, result: RuntimeValue?): KatariState {
+        return updateTask(index, tasks[index].copy(status = TaskStatus.Completed, result = result))
     }
 
     private fun isTaskFinal(status: TaskStatus): Boolean {
-        return status == TaskStatus.Completed || status is TaskStatus.Failed
+        return status == TaskStatus.Completed || status == TaskStatus.Stopped || status is TaskStatus.Failed
     }
 
     private fun buildRuntimeErrorMessage(position: Any?, error: Throwable): String {
@@ -976,6 +1233,36 @@ class KatariInstance(
 private data class FunctionDispatchRequest(
     val taskId: String,
 )
+
+private fun nextTaskIdCounter(state: KatariState): Int {
+    return collectKnownTaskIds(state)
+        .mapNotNull { KATARI_TASK_ID_REGEX.matchEntire(it)?.groupValues?.get(1)?.toIntOrNull() }
+        .maxOrNull()
+        ?.plus(1)
+        ?: 0
+}
+
+private fun collectKnownTaskIds(state: KatariState): Set<String> {
+    val ids = linkedSetOf<String>()
+    state.tasks.forEach { task ->
+        ids += task.id
+        task.localVariables.values.forEach { ids.collectTaskId(it) }
+        task.callFrames.forEach { frame ->
+            frame.localVariables.values.forEach { ids.collectTaskId(it) }
+        }
+        task.result?.let { ids.collectTaskId(it) }
+    }
+    state.globals.values.forEach { ids.collectTaskId(it) }
+    return ids
+}
+
+private fun MutableSet<String>.collectTaskId(value: RuntimeValue) {
+    if (value is KatariTaskValue) {
+        this += value.taskId
+    }
+}
+
+private val KATARI_TASK_ID_REGEX = Regex("__katari_task_(\\d+)")
 
 private data class DispatchData(
     val taskId: String,

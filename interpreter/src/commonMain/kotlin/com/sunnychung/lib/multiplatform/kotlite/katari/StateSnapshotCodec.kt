@@ -11,6 +11,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.EnumEntriesIteratorValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
 import com.sunnychung.lib.multiplatform.kotlite.model.IteratorValue
+import com.sunnychung.lib.multiplatform.kotlite.model.KatariTaskValue
 import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
 import com.sunnychung.lib.multiplatform.kotlite.model.ListValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumEntriesValue
@@ -65,6 +66,8 @@ class StateSnapshotCodec(
                 nextCallFrameId = task.nextCallFrameId,
                 slots = task.slots.mapValues { (_, value) -> serializeSlot(value) },
                 status = serializeStatus(task.status),
+                resultRef = task.result?.let { valueTable.reference(it) },
+                raceGroupId = task.raceGroupId,
             )
         }
         return KatariStateSnapshot(
@@ -109,6 +112,8 @@ class StateSnapshotCodec(
                     nextCallFrameId = task.nextCallFrameId,
                     slots = task.slots.mapValues { (_, value) -> restoreSlot(value) },
                     status = restoreStatus(task.status),
+                    result = task.resultRef?.let { sharedValues.getValue(it.valueId) },
+                    raceGroupId = task.raceGroupId,
                 )
             },
         )
@@ -118,6 +123,7 @@ class StateSnapshotCodec(
         return valueCodecs.serializersModule() + SerializersModule {
             polymorphic(ValueSnapshot::class) {
                 subclass(ChoiceOptionValueSnapshot::class, ChoiceOptionValueSnapshot.serializer())
+                subclass(KatariTaskValueSnapshot::class, KatariTaskValueSnapshot.serializer())
             }
         }
     }
@@ -131,6 +137,13 @@ class StateSnapshotCodec(
             is DoubleValue -> Float64ValueSnapshot(value.value)
             is StringValue -> TextValueSnapshot(value.value)
             is NarrativeLambdaValue -> LambdaValueSnapshot(value.lambdaId)
+            is KatariTaskValue -> KatariTaskValueSnapshot(
+                taskId = value.taskId,
+                entryPointer = value.entryPointer,
+                rootFrameId = value.rootFrameId,
+                capturedVariables = value.capturedVariables.mapValues { (_, captured) -> serializeValue(captured) },
+                started = value.started,
+            )
             is NarrativeEnumValue -> EnumValueSnapshot(
                 typeId = value.typeId,
                 entryName = value.entryName,
@@ -186,6 +199,14 @@ class StateSnapshotCodec(
             is Float64ValueSnapshot -> DoubleValue(snapshot.value, symbolTable())
             is TextValueSnapshot -> StringValue(snapshot.value, symbolTable())
             is LambdaValueSnapshot -> NarrativeLambdaValue(snapshot.id, symbolTable())
+            is KatariTaskValueSnapshot -> KatariTaskValue(
+                taskId = snapshot.taskId,
+                entryPointer = snapshot.entryPointer,
+                rootFrameId = snapshot.rootFrameId,
+                capturedVariables = snapshot.capturedVariables.mapValues { (_, value) -> restoreValue(value, context) },
+                started = snapshot.started,
+                symbolTable = symbolTable(),
+            )
             is EnumValueSnapshot -> NarrativeEnumValue(
                 typeId = snapshot.typeId,
                 entryName = snapshot.entryName,
@@ -254,28 +275,52 @@ class StateSnapshotCodec(
     private fun serializeStatus(status: TaskStatus): TaskStatusSnapshot {
         return when (status) {
             TaskStatus.Ready -> TaskStatusSnapshot.Ready
+            is TaskStatus.Paused -> TaskStatusSnapshot.Paused(serializeStatus(status.innerStatus))
             is TaskStatus.SuspendedCall -> TaskStatusSnapshot.SuspendedCall(
                 resultTarget = serializeResultTarget(status.resultTarget),
+                nextInstructionPointer = status.nextInstructionPointer,
+            )
+            is TaskStatus.WaitingTaskJoin -> TaskStatusSnapshot.WaitingTaskJoin(
+                taskId = status.taskId,
+                resultTarget = serializeResultTarget(status.resultTarget),
+                nextInstructionPointer = status.nextInstructionPointer,
+            )
+            is TaskStatus.WaitingRace -> TaskStatusSnapshot.WaitingRace(
+                raceId = status.raceId,
+                resultTarget = serializeResultTarget(status.resultTarget)!!,
                 nextInstructionPointer = status.nextInstructionPointer,
             )
             is TaskStatus.Failed -> TaskStatusSnapshot.Failed(
                 message = status.message,
             )
             TaskStatus.Completed -> TaskStatusSnapshot.Completed
+            TaskStatus.Stopped -> TaskStatusSnapshot.Stopped
         }
     }
 
     private fun restoreStatus(status: TaskStatusSnapshot): TaskStatus {
         return when (status) {
             TaskStatusSnapshot.Ready -> TaskStatus.Ready
+            is TaskStatusSnapshot.Paused -> TaskStatus.Paused(restoreStatus(status.innerStatus))
             is TaskStatusSnapshot.SuspendedCall -> TaskStatus.SuspendedCall(
                 resultTarget = restoreResultTarget(status.resultTarget),
+                nextInstructionPointer = status.nextInstructionPointer,
+            )
+            is TaskStatusSnapshot.WaitingTaskJoin -> TaskStatus.WaitingTaskJoin(
+                taskId = status.taskId,
+                resultTarget = restoreResultTarget(status.resultTarget),
+                nextInstructionPointer = status.nextInstructionPointer,
+            )
+            is TaskStatusSnapshot.WaitingRace -> TaskStatus.WaitingRace(
+                raceId = status.raceId,
+                resultTarget = restoreResultTarget(status.resultTarget)!!,
                 nextInstructionPointer = status.nextInstructionPointer,
             )
             is TaskStatusSnapshot.Failed -> TaskStatus.Failed(
                 message = status.message,
             )
             TaskStatusSnapshot.Completed -> TaskStatus.Completed
+            TaskStatusSnapshot.Stopped -> TaskStatus.Stopped
         }
     }
 

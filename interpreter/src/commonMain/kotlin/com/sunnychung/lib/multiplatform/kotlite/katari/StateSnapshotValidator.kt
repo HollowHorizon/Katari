@@ -29,6 +29,13 @@ object StateSnapshotValidator {
                     values = snapshot.values,
                 )
             }
+            task.resultRef?.let { ref ->
+                validateValueRef(
+                    path = "tasks[$taskIndex].resultRef",
+                    ref = ref,
+                    values = snapshot.values,
+                )
+            }
             task.callFrames.forEachIndexed { frameIndex, frame ->
                 frame.variableRefs.forEach { (name, ref) ->
                     validateValueRef(

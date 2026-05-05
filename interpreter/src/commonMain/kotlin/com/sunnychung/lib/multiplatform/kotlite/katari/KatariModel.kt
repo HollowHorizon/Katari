@@ -59,6 +59,32 @@ data class EndInstruction(
     override val position: SourcePosition? = null,
 ) : KatariInstruction
 
+data class CreateAsyncTaskInstruction(
+    val entryPointer: Int,
+    val rootFrameId: Int,
+    val resultTarget: ResultTarget,
+    override val position: SourcePosition? = null,
+) : KatariInstruction
+
+data class TaskControlInstruction(
+    val task: KatariExpression,
+    val operation: TaskControlOperation,
+    val resultTarget: ResultTarget? = null,
+    override val position: SourcePosition? = null,
+) : KatariInstruction
+
+data class StartRaceInstruction(
+    val raceId: String,
+    val entries: List<RaceEntryInstruction>,
+    val resultTarget: ResultTarget,
+    override val position: SourcePosition? = null,
+) : KatariInstruction
+
+data class CompleteTaskInstruction(
+    val resultExpression: KatariExpression? = null,
+    override val position: SourcePosition? = null,
+) : KatariInstruction
+
 data class EnterCallFrameInstruction(
     val functionId: String,
     val lexicalParentFrameId: Int? = null,
@@ -150,6 +176,19 @@ sealed interface ResultTarget {
     data class Slot(val slot: Int) : ResultTarget
 }
 
+enum class TaskControlOperation {
+    Start,
+    Stop,
+    Pause,
+    Resume,
+    Join,
+}
+
+data class RaceEntryInstruction(
+    val entryPointer: Int,
+    val rootFrameId: Int,
+)
+
 enum class UnaryOperator {
     Plus,
     Minus,
@@ -198,6 +237,8 @@ data class TaskState(
     val nextCallFrameId: Int = ROOT_CALL_FRAME_ID + 1,
     val slots: Map<Int, SlotValue> = emptyMap(),
     val status: TaskStatus = TaskStatus.Ready,
+    val result: RuntimeValue? = null,
+    val raceGroupId: String? = null,
 )
 
 data class CallFrameState(
@@ -216,14 +257,28 @@ sealed interface SlotValue {
 
 sealed interface TaskStatus {
     data object Ready : TaskStatus
+    data class Paused(
+        val innerStatus: TaskStatus = Ready,
+    ) : TaskStatus
     data class SuspendedCall(
         val resultTarget: ResultTarget?,
+        val nextInstructionPointer: Int,
+    ) : TaskStatus
+    data class WaitingTaskJoin(
+        val taskId: String,
+        val resultTarget: ResultTarget?,
+        val nextInstructionPointer: Int,
+    ) : TaskStatus
+    data class WaitingRace(
+        val raceId: String,
+        val resultTarget: ResultTarget,
         val nextInstructionPointer: Int,
     ) : TaskStatus
     data class Failed(
         val message: String,
     ) : TaskStatus
     data object Completed : TaskStatus
+    data object Stopped : TaskStatus
 }
 
 @Serializable
@@ -250,6 +305,8 @@ data class TaskSnapshot(
     val nextCallFrameId: Int,
     val slots: Map<Int, SlotSnapshot>,
     val status: TaskStatusSnapshot,
+    val resultRef: ValueReferenceSnapshot? = null,
+    val raceGroupId: String? = null,
 )
 
 @Serializable
@@ -271,8 +328,27 @@ sealed interface TaskStatusSnapshot {
     data object Ready : TaskStatusSnapshot
 
     @Serializable
+    data class Paused(
+        val innerStatus: TaskStatusSnapshot = Ready,
+    ) : TaskStatusSnapshot
+
+    @Serializable
     data class SuspendedCall(
         val resultTarget: ResultTargetSnapshot?,
+        val nextInstructionPointer: Int,
+    ) : TaskStatusSnapshot
+
+    @Serializable
+    data class WaitingTaskJoin(
+        val taskId: String,
+        val resultTarget: ResultTargetSnapshot?,
+        val nextInstructionPointer: Int,
+    ) : TaskStatusSnapshot
+
+    @Serializable
+    data class WaitingRace(
+        val raceId: String,
+        val resultTarget: ResultTargetSnapshot,
         val nextInstructionPointer: Int,
     ) : TaskStatusSnapshot
 
@@ -283,6 +359,9 @@ sealed interface TaskStatusSnapshot {
 
     @Serializable
     data object Completed : TaskStatusSnapshot
+
+    @Serializable
+    data object Stopped : TaskStatusSnapshot
 }
 
 @Serializable
@@ -329,6 +408,16 @@ data class TextValueSnapshot(val value: String) : ValueSnapshot()
 @Serializable
 @SerialName("lambda")
 data class LambdaValueSnapshot(val id: String) : ValueSnapshot()
+
+@Serializable
+@SerialName("katari_task")
+data class KatariTaskValueSnapshot(
+    val taskId: String,
+    val entryPointer: Int,
+    val rootFrameId: Int,
+    val capturedVariables: Map<String, @Polymorphic ValueSnapshot>,
+    val started: Boolean,
+) : ValueSnapshot()
 
 @Serializable
 @SerialName("enum")
