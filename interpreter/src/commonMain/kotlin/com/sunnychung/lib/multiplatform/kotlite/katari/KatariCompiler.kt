@@ -1,16 +1,21 @@
 package com.sunnychung.lib.multiplatform.kotlite.katari
 
+import com.sunnychung.lib.multiplatform.kotlite.KotliteInterpreter
 import com.sunnychung.lib.multiplatform.kotlite.model.ASTNode
 import com.sunnychung.lib.multiplatform.kotlite.model.AssignmentNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BinaryOpNode
+import com.sunnychung.lib.multiplatform.kotlite.model.BooleanNode
+import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
 import com.sunnychung.lib.multiplatform.kotlite.model.BreakNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
-import com.sunnychung.lib.multiplatform.kotlite.model.BooleanNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ClassDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ClassModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.ContinueNode
+import com.sunnychung.lib.multiplatform.kotlite.model.DefaultArgumentMarker
 import com.sunnychung.lib.multiplatform.kotlite.model.DoubleNode
+import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.EnumEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallArgumentNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
@@ -20,20 +25,26 @@ import com.sunnychung.lib.multiplatform.kotlite.model.IfNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IndexOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IntegerNode
 import com.sunnychung.lib.multiplatform.kotlite.model.InfixFunctionCallNode
+import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
 import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
 import com.sunnychung.lib.multiplatform.kotlite.model.PropertyDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ReturnNode
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringFieldIdentifierNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
 import com.sunnychung.lib.multiplatform.kotlite.model.UnaryOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
@@ -48,6 +59,13 @@ class KatariCompiler(
     private val nameAliases: Map<String, String> = emptyMap(),
     private val scriptNamespaces: Map<String, Set<String>> = emptyMap(),
 ) {
+    private val symbolTable: SymbolTable by lazy {
+        KotliteInterpreter(
+            filename = "<NarrativeCompiler>",
+            code = "",
+            executionEnvironment = ExecutionEnvironment(),
+        ).symbolTable()
+    }
 
     private var temporarySlotCounter: Int = 0
     private var lambdaCounter = 0
@@ -164,7 +182,7 @@ class KatariCompiler(
             is UnaryOpNode -> compileUnaryStatement(statement, instructions)
             is StringLiteralNode -> instructions += CallFunctionInstruction(
                 functionId = "narrate",
-                arguments = listOf(LiteralExpression(KatariValue.Text(statement.content))),
+                arguments = listOf(LiteralExpression(StringValue(statement.content, symbolTable))),
                 position = statement.position,
             )
             is StringNode -> instructions += CallFunctionInstruction(
@@ -227,11 +245,12 @@ class KatariCompiler(
                 constructorParameters = constructorParameters,
                 entry = entry,
             )
-            KatariValue.EnumValue(
+            NarrativeEnumValue(
                 typeId = name,
                 entryName = entry.name,
                 ordinal = index,
                 properties = properties,
+                symbolTable = symbolTable,
             )
         }
         return KatariEnumDefinition(typeId = name, entries = entries)
@@ -241,7 +260,7 @@ class KatariCompiler(
         enumName: String,
         constructorParameters: List<FunctionValueParameterNode>,
         entry: EnumEntryNode,
-    ): Map<String, KatariValue> {
+    ): Map<String, RuntimeValue> {
         require(!entry.arguments.hasPositionalArgumentAfterNamedArgument()) {
             "${entry.position} Positional arguments cannot follow named arguments"
         }
@@ -254,7 +273,7 @@ class KatariCompiler(
                 "${argument.position} Argument `$name` is provided more than once"
             }
         }
-        val properties = linkedMapOf<String, KatariValue>()
+        val properties = linkedMapOf<String, RuntimeValue>()
         constructorParameters.forEach { parameter ->
             val argument = if (positionalArguments.isNotEmpty()) {
                 positionalArguments.removeAt(0)
@@ -276,29 +295,19 @@ class KatariCompiler(
         return properties
     }
 
-    private fun evaluateConstantEnumValue(node: ASTNode): KatariValue {
+    private fun evaluateConstantEnumValue(node: ASTNode): RuntimeValue {
         return when (node) {
-            is BooleanNode -> KatariValue.Bool(node.value)
-            is IntegerNode -> KatariValue.Int32(node.value)
-            is DoubleNode -> KatariValue.Float64(node.value)
-            NullNode -> KatariValue.Null
-            is StringLiteralNode -> KatariValue.Text(node.content)
-            is StringNode -> KatariValue.Text(
+            is BooleanNode -> BooleanValue(node.value, symbolTable)
+            is IntegerNode -> IntValue(node.value, symbolTable)
+            is DoubleNode -> DoubleValue(node.value, symbolTable)
+            NullNode -> NullValue
+            is StringLiteralNode -> StringValue(node.content, symbolTable)
+            is StringNode -> StringValue(
                 node.nodes.joinToString("") { part ->
                     val value = evaluateConstantEnumValue(part)
-                    when (value) {
-                        KatariValue.Null -> "null"
-                        KatariValue.DefaultArgument -> "<default>"
-                        is KatariValue.Bool -> value.value.toString()
-                        is KatariValue.Int32 -> value.value.toString()
-                        is KatariValue.Float64 -> value.value.toString()
-                        is KatariValue.Text -> value.value
-                        is KatariValue.Lambda -> "Lambda(${value.id})"
-                        is KatariValue.EnumValue -> value.entryName
-                        is KatariValue.EnumEntries -> value.entries.joinToString(prefix = "[", postfix = "]") { it.entryName }
-                        is KatariValue.HostObject -> value.value.toString()
-                    }
-                }
+                    value.convertToString()
+                },
+                symbolTable,
             )
             is UnaryOpNode -> {
                 val operand = evaluateConstantEnumValue(
@@ -307,12 +316,12 @@ class KatariCompiler(
                 when (node.operator) {
                     "+" -> operand
                     "-" -> when (operand) {
-                        is KatariValue.Int32 -> KatariValue.Int32(-operand.value)
-                        is KatariValue.Float64 -> KatariValue.Float64(-operand.value)
+                        is IntValue -> IntValue(-operand.value, symbolTable)
+                        is DoubleValue -> DoubleValue(-operand.value, symbolTable)
                         else -> throw IllegalArgumentException("${node.position} Enum constructor unary `-` expects numeric value")
                     }
-                    "!" -> KatariValue.Bool(!(operand as? KatariValue.Bool
-                        ?: throw IllegalArgumentException("${node.position} Enum constructor unary `!` expects Boolean")).value)
+                    "!" -> BooleanValue(!(operand as? BooleanValue
+                        ?: throw IllegalArgumentException("${node.position} Enum constructor unary `!` expects Boolean")).value, symbolTable)
                     else -> throw IllegalArgumentException("${node.position} Unsupported enum constructor unary operator `${node.operator}`")
                 }
             }
@@ -413,7 +422,7 @@ class KatariCompiler(
             CompiledChooseEntry(
                 entry = entry,
                 argumentExpression = compileChooseEntryArgument(entry, optionTextExpression, instructions),
-                selectedIdExpression = LiteralExpression(KatariValue.Text(indexText)),
+                selectedIdExpression = LiteralExpression(StringValue(indexText, symbolTable)),
             )
         }
         instructions += CallFunctionInstruction(
@@ -473,16 +482,16 @@ class KatariCompiler(
         }
         val slot = nextTemporarySlot()
         val visibleExpression = entry.visibleCondition?.let { compileExpression(it, instructions) }
-            ?: LiteralExpression(KatariValue.Bool(true))
+            ?: LiteralExpression(BooleanValue(true, symbolTable))
         val enabledExpression = entry.disableCondition?.let {
             UnaryExpression(
                 operator = UnaryOperator.Not,
                 operand = compileExpression(it, instructions),
                 position = entry.position,
             )
-        } ?: LiteralExpression(KatariValue.Bool(true))
+        } ?: LiteralExpression(BooleanValue(true, symbolTable))
         val disabledTextExpression = entry.disabledText?.let { compileExpression(it, instructions) }
-            ?: LiteralExpression(KatariValue.Null)
+            ?: LiteralExpression(NullValue)
         instructions += CallFunctionInstruction(
             functionId = "choiceOption",
             arguments = listOf(
@@ -671,7 +680,7 @@ class KatariCompiler(
     ) {
         val statements = block?.statements ?: listOf(NullNode)
         if (statements.isEmpty()) {
-            instructions += SetResultInstruction(target, LiteralExpression(KatariValue.Null), block?.position)
+            instructions += SetResultInstruction(target, LiteralExpression(NullValue), block?.position)
             return
         }
         statements.dropLast(1).forEach { compileStatement(it, instructions) }
@@ -1160,11 +1169,11 @@ class KatariCompiler(
 
     private fun compileExpression(expression: ASTNode, instructions: MutableList<KatariInstruction>): KatariExpression {
         return when (expression) {
-            is BooleanNode -> LiteralExpression(KatariValue.Bool(expression.value), position = expression.position)
-            is IntegerNode -> LiteralExpression(KatariValue.Int32(expression.value), position = expression.position)
-            is DoubleNode -> LiteralExpression(KatariValue.Float64(expression.value), position = expression.position)
-            NullNode -> LiteralExpression(KatariValue.Null, position = expression.position)
-            is StringLiteralNode -> LiteralExpression(KatariValue.Text(expression.content), position = expression.position)
+            is BooleanNode -> LiteralExpression(BooleanValue(expression.value, symbolTable), position = expression.position)
+            is IntegerNode -> LiteralExpression(IntValue(expression.value, symbolTable), position = expression.position)
+            is DoubleNode -> LiteralExpression(DoubleValue(expression.value, symbolTable), position = expression.position)
+            NullNode -> LiteralExpression(NullValue, position = expression.position)
+            is StringLiteralNode -> LiteralExpression(StringValue(expression.content, symbolTable), position = expression.position)
             is StringNode -> compileStringExpression(expression, instructions)
             is StringFieldIdentifierNode -> VariableExpression(resolveVariableName(expression.variableName), position = expression.position)
             is VariableReferenceNode -> VariableExpression(resolveVariableName(expression.variableName), position = expression.position)
@@ -1644,7 +1653,7 @@ class KatariCompiler(
         val updateExpression = BinaryExpression(
             left = VariableExpression(variableName),
             operator = if (delta > 0) BinaryOperator.Add else BinaryOperator.Subtract,
-            right = LiteralExpression(KatariValue.Int32(abs(delta))),
+            right = LiteralExpression(IntValue(abs(delta), symbolTable)),
             position = node.position,
         )
         return when (node.operator) {
@@ -1663,7 +1672,7 @@ class KatariCompiler(
                     expression = BinaryExpression(
                         left = VariableExpression(variableName),
                         operator = BinaryOperator.Add,
-                        right = LiteralExpression(KatariValue.Int32(0)),
+                        right = LiteralExpression(IntValue(0, symbolTable)),
                         position = node.position,
                     ),
                     position = node.position,

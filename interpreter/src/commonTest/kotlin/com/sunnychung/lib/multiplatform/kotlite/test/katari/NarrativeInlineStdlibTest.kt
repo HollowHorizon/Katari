@@ -120,7 +120,7 @@ class NarrativeInlineStdlibTest {
                 tasks = listOf(TaskState(id = "main")),
                 globals = initialBindings.globals,
             ),
-            functionRegistry = initialBindings.functionRegistry,
+            executionEnvironment = initialBindings.executionEnvironment,
             snapshotCodec = initialBindings.snapshotCodec,
             coroutineScope = this,
         )
@@ -158,7 +158,7 @@ class NarrativeInlineStdlibTest {
                 bindings = resumedBindings,
             ),
             initialState = resumedBindings.snapshotCodec.restore(snapshot),
-            functionRegistry = resumedBindings.functionRegistry,
+            executionEnvironment = resumedBindings.executionEnvironment,
             snapshotCodec = resumedBindings.snapshotCodec,
             coroutineScope = this,
         )
@@ -193,7 +193,7 @@ class NarrativeInlineStdlibTest {
                 tasks = listOf(TaskState(id = "main")),
                 globals = initialBindings.globals,
             ),
-            functionRegistry = initialBindings.functionRegistry,
+            executionEnvironment = initialBindings.executionEnvironment,
             snapshotCodec = initialBindings.snapshotCodec,
             coroutineScope = this,
         )
@@ -224,7 +224,7 @@ class NarrativeInlineStdlibTest {
                 bindings = resumedBindings,
             ),
             initialState = resumedBindings.snapshotCodec.restore(snapshot),
-            functionRegistry = resumedBindings.functionRegistry,
+            executionEnvironment = resumedBindings.executionEnvironment,
             snapshotCodec = resumedBindings.snapshotCodec,
             coroutineScope = this,
         )

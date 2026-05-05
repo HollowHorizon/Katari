@@ -181,6 +181,11 @@ class LambdaValue(val value: LambdaLiteralNode, private val resolvedType: Functi
     }
 }
 
+data object DefaultArgumentMarker : RuntimeValue {
+    override fun type(): DataType = UnresolvedType
+    override fun convertToString(): String = "<default>"
+}
+
 internal fun findType(typeName: String, value1: RuntimeValue, value2: RuntimeValue): ObjectType {
     val type = if (value1.type().name == typeName) {
         value1.type()

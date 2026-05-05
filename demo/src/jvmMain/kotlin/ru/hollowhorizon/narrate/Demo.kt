@@ -134,7 +134,7 @@ private fun createInstance(
     return KatariInstance(
         program = program,
         initialState = initialState.copy(globals = bindings.globals),
-        functionRegistry = bindings.functionRegistry,
+        executionEnvironment = bindings.executionEnvironment,
         snapshotCodec = bindings.snapshotCodec,
         coroutineScope = scope,
     )

@@ -7,12 +7,13 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.KatariSource
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariSourceProvider
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariSourceRequest
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariState
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValue
 import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBindings
 import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
 import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskState
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatus
+import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
+import com.sunnychung.lib.multiplatform.kotlite.katari.StateSnapshotCodec
 import com.sunnychung.lib.multiplatform.kotlite.stdlib.AllStdLibModules
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -24,6 +25,8 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class KatariImportsTest {
+
+    private fun symbolTable() = StateSnapshotCodec().symbolTable()
 
     @Test
     fun importKatariScriptAddsOnlyFunctions() = runTest {
@@ -45,7 +48,7 @@ class KatariImportsTest {
         )
         val instance = KatariInstance(
             program = program,
-            functionRegistry = NarrativeBuiltinFunctions.registry(recordingHost(events)),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(recordingHost(events)),
             coroutineScope = this,
         )
 
@@ -77,7 +80,7 @@ class KatariImportsTest {
         )
         val instance = KatariInstance(
             program = program,
-            functionRegistry = NarrativeBuiltinFunctions.registry(recordingHost(events)),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(recordingHost(events)),
             coroutineScope = this,
         )
 
@@ -112,7 +115,7 @@ class KatariImportsTest {
         )
         val instance = KatariInstance(
             program = program,
-            functionRegistry = NarrativeBuiltinFunctions.registry(recordingHost(events)),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(recordingHost(events)),
             coroutineScope = this,
         )
 
@@ -144,7 +147,7 @@ class KatariImportsTest {
         )
         val instance = KatariInstance(
             program = program,
-            functionRegistry = NarrativeBuiltinFunctions.registry(recordingHost(events)),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(recordingHost(events)),
             coroutineScope = this,
         )
 
@@ -199,7 +202,7 @@ class KatariImportsTest {
         )
         val instance = KatariInstance(
             program = program,
-            functionRegistry = NarrativeBuiltinFunctions.registry(recordingHost(events)),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(recordingHost(events)),
             coroutineScope = this,
         )
 
@@ -210,7 +213,6 @@ class KatariImportsTest {
         assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("A", "B"), events)
     }
-
 
     @Test
     fun bindingImportAliasCanExposeImportedGlobals() = runTest {
@@ -232,7 +234,7 @@ class KatariImportsTest {
                 tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
-            functionRegistry = bindings.functionRegistry,
+            executionEnvironment = bindings.executionEnvironment,
             coroutineScope = this,
         )
 
@@ -245,8 +247,9 @@ class KatariImportsTest {
 
     @Test
     fun bindingWildcardImportExposesQualifiedGlobalsBySimpleName() = runTest {
+        val st = symbolTable()
         val bindings = NarrativeBindings {
-            global("test.library.answer", KatariValue.Int32(42))
+            global("test.library.answer", IntValue(42, st))
             importWildcard("test.library")
         }
         val program = KatariNarrativeProgram(
@@ -263,7 +266,7 @@ class KatariImportsTest {
                 tasks = listOf(TaskState(id = "main")),
                 globals = bindings.globals,
             ),
-            functionRegistry = bindings.functionRegistry,
+            executionEnvironment = bindings.executionEnvironment,
             coroutineScope = this,
         )
 
@@ -273,7 +276,7 @@ class KatariImportsTest {
 
         val task = instance.currentState().tasks.single()
         assertEquals(TaskStatus.Completed, task.status)
-        assertEquals(KatariValue.Int32(42), task.localVariables.getValue("result"))
+        assertEquals(IntValue(42, st), task.localVariables.getValue("result"))
     }
 
     private fun mapSourceProvider(vararg sources: Pair<String, String>): KatariSourceProvider {

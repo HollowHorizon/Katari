@@ -5,20 +5,12 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.ChoiceOptionSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariNarrativeProgram
 import com.sunnychung.lib.multiplatform.kotlite.katari.LiteralExpression
 import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionContext
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariCallableSignature
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionDefinition
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionDispatchContext
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariFunctionRegistry
-import com.sunnychung.lib.multiplatform.kotlite.katari.FunctionResponse
-import com.sunnychung.lib.multiplatform.kotlite.katari.FunctionResult
-import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariInstance
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
 import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeNoOpHost
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariProgram
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariState
 import com.sunnychung.lib.multiplatform.kotlite.katari.KatariStateSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariTypes
 import com.sunnychung.lib.multiplatform.kotlite.katari.StateSnapshotCodec
 import com.sunnychung.lib.multiplatform.kotlite.katari.StateSnapshotValidationException
 import com.sunnychung.lib.multiplatform.kotlite.katari.ResultTarget
@@ -28,18 +20,34 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.TaskSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskState
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatus
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatusSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValue
 import com.sunnychung.lib.multiplatform.kotlite.katari.LambdaValueSnapshot
+import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBindings
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueCodec
-import com.sunnychung.lib.multiplatform.kotlite.katari.KatariValueCodecRegistry
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueReferenceSnapshot
-import com.sunnychung.lib.multiplatform.kotlite.katari.asValueParameter
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueRestoreContext
 import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.SetResultInstruction
 import com.sunnychung.lib.multiplatform.kotlite.katari.TextValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.VariableExpression
 import com.sunnychung.lib.multiplatform.kotlite.katari.ROOT_CALL_FRAME_ID
+import com.sunnychung.lib.multiplatform.kotlite.error.SemanticException
+import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
+import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionResponse
+import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallContext
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallDispatchContext
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallResult
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallable
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeHostValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeLambdaValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
+import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameter
+import com.sunnychung.lib.multiplatform.kotlite.stdlib.AllStdLibModules
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -57,6 +65,8 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class KatariInstanceTest {
+
+    private fun symbolTable() = StateSnapshotCodec().symbolTable()
 
     @Test
     fun instanceRunsBuiltinNarrateThroughHostCallback() = runTest {
@@ -84,7 +94,7 @@ class KatariInstanceTest {
                 programVersion = 1,
                 tasks = listOf(TaskState(id = "main")),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -118,14 +128,14 @@ class KatariInstanceTest {
                     CallFunctionInstruction(
                         functionId = "choose",
                         arguments = listOf(
-                            LiteralExpression(KatariValue.Text("One")),
-                            LiteralExpression(KatariValue.Text("Two")),
+                            LiteralExpression(StringValue("One", symbolTable())),
+                            LiteralExpression(StringValue("Two", symbolTable())),
                         ),
                         resultTarget = ResultTarget.Slot(0),
                     ),
                 )
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -158,14 +168,14 @@ class KatariInstanceTest {
                     CallFunctionInstruction(
                         functionId = "chooseExhaustible",
                         arguments = listOf(
-                            LiteralExpression(KatariValue.Null),
-                            LiteralExpression(KatariValue.Text("Visible")),
+                            LiteralExpression(NullValue),
+                            LiteralExpression(StringValue("Visible", symbolTable())),
                         ),
                         resultTarget = ResultTarget.Variable("answer"),
                     ),
                 )
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -175,7 +185,7 @@ class KatariInstanceTest {
 
         assertEquals(1, seenOptions.single().size)
         assertEquals("Visible", seenOptions.single().single().text)
-        assertEquals(KatariValue.Text("Visible"), instance.currentState().tasks.single().localVariables.getValue("answer"))
+        assertEquals(StringValue("Visible", symbolTable()), instance.currentState().tasks.single().localVariables.getValue("answer"))
     }
 
     @Test
@@ -191,7 +201,7 @@ class KatariInstanceTest {
         val codec = StateSnapshotCodec()
         val instance = KatariInstance(
             program = KatariNarrativeProgram("<Narrative>", "\"Hello\""),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             snapshotCodec = codec,
             coroutineScope = this,
         )
@@ -228,7 +238,7 @@ class KatariInstanceTest {
                     }
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             snapshotCodec = codec,
             coroutineScope = this,
         )
@@ -300,7 +310,7 @@ class KatariInstanceTest {
                 tasks = listOf(
                     TaskState(
                         id = "main",
-                        localVariables = mapOf("name" to KatariValue.Text("Igor")),
+                        localVariables = mapOf("name" to StringValue("Igor", symbolTable())),
                     )
                 ),
             ),
@@ -329,14 +339,14 @@ class KatariInstanceTest {
                     CallFunctionInstruction(
                         functionId = "choose",
                         arguments = listOf(
-                            LiteralExpression(KatariValue.Text("ivan")),
-                            LiteralExpression(KatariValue.Text("petr")),
+                            LiteralExpression(StringValue("ivan", symbolTable())),
+                            LiteralExpression(StringValue("petr", symbolTable())),
                         ),
                         resultTarget = ResultTarget.Slot(0),
                     ),
                 )
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(
+            executionEnvironment = NarrativeBuiltinFunctions.environment(
                 object : NarrativeHost {
                     override fun narrate(text: String, resume: () -> Unit) = error("unused")
                     override fun readLine(question: String, resume: (String) -> Unit) = error("unused")
@@ -358,7 +368,7 @@ class KatariInstanceTest {
         val snapshotSlot = snapshot.tasks.single().slots.getValue(0)
 
         assertEquals(SlotValue.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID), slot)
-        assertEquals(KatariValue.Text("ivan"), task.localVariables.getValue("__narrative_slot_0"))
+        assertEquals(StringValue("ivan", symbolTable()), task.localVariables.getValue("__narrative_slot_0"))
         assertEquals(SlotSnapshot.VariableReference("__narrative_slot_0", frameId = ROOT_CALL_FRAME_ID), snapshotSlot)
     }
 
@@ -391,7 +401,7 @@ class KatariInstanceTest {
                 tasks = listOf(
                     TaskState(
                         id = "main",
-                        localVariables = mapOf("npc" to KatariValue.HostObject("npc", "npc-1")),
+                        localVariables = mapOf("npc" to NarrativeHostValue("npc", "npc-1", symbolTable())),
                     )
                 ),
             ),
@@ -406,7 +416,7 @@ class KatariInstanceTest {
 
     @Test
     fun externalValueRestoreUsesSuspendDeserializer() = runTest {
-        val valueRegistry = KatariValueCodecRegistry(listOf(TestNpcCodec()))
+        val valueRegistry = com.sunnychung.lib.multiplatform.kotlite.katari.KatariValueCodecRegistry(listOf(TestNpcCodec()))
         val codec = StateSnapshotCodec(valueCodecs = valueRegistry)
         val original = KatariState(
             programVersion = 1,
@@ -414,7 +424,7 @@ class KatariInstanceTest {
                 TaskState(
                     id = "main",
                     instructionPointer = 0,
-                    localVariables = mapOf("speaker" to KatariValue.HostObject("npc", TestNpcRef("npc-2"))),
+                    localVariables = mapOf("speaker" to NarrativeHostValue("npc", TestNpcRef("npc-2"), symbolTable())),
                     status = TaskStatus.Ready,
                 )
             ),
@@ -434,13 +444,13 @@ class KatariInstanceTest {
         )
 
         assertEquals(emptyMap(), restored.globals)
-        assertEquals(TestNpcRef("restored:npc-2"), assertIs<KatariValue.HostObject>(restored.tasks.single().localVariables.getValue("speaker")).value)
+        assertEquals(TestNpcRef("restored:npc-2"), assertIs<NarrativeHostValue>(restored.tasks.single().localVariables.getValue("speaker")).value)
     }
 
     @Test
     fun snapshotPreservesSharedValuesAcrossTasks() = runTest {
         val codec = StateSnapshotCodec(
-            valueCodecs = KatariValueCodecRegistry(listOf(TestNpcCodec())),
+            valueCodecs = com.sunnychung.lib.multiplatform.kotlite.katari.KatariValueCodecRegistry(listOf(TestNpcCodec())),
         )
         val npc = TestNpcRef("npc-1")
         val original = KatariState(
@@ -448,21 +458,21 @@ class KatariInstanceTest {
             tasks = listOf(
                 TaskState(
                     id = "main",
-                    localVariables = mapOf("npc" to KatariValue.HostObject("npc", npc)),
+                    localVariables = mapOf("npc" to NarrativeHostValue("npc", npc, symbolTable())),
                 ),
                 TaskState(
                     id = "side",
-                    localVariables = mapOf("npc" to KatariValue.HostObject("npc", npc)),
+                    localVariables = mapOf("npc" to NarrativeHostValue("npc", npc, symbolTable())),
                 ),
             ),
         )
 
         val snapshot = codec.serialize(original)
         val restored = codec.restore(snapshot, TestRestoreContext)
-        val mainNpc = assertIs<KatariValue.HostObject>(
+        val mainNpc = assertIs<NarrativeHostValue>(
             restored.tasks.first { it.id == "main" }.localVariables.getValue("npc")
         ).value
-        val sideNpc = assertIs<KatariValue.HostObject>(
+        val sideNpc = assertIs<NarrativeHostValue>(
             restored.tasks.first { it.id == "side" }.localVariables.getValue("npc")
         ).value
 
@@ -476,23 +486,20 @@ class KatariInstanceTest {
 
     @Test
     fun customSuspendableFunctionResumesItselfThroughDispatchCallback() = runTest {
-        val functionRegistry = KatariFunctionRegistry(
-            listOf(
-                *builtinFunctionDefinitions(),
-                PromptFlagFunction,
-            )
-        )
+        val env = ExecutionEnvironment()
+        NarrativeBuiltinFunctions.definitions(recordingNoOpHost()).forEach { env.registerNarrativeCallable(it) }
+        env.registerNarrativeCallable(PromptFlagFunction)
         val instance = KatariInstance(
             program = KatariProgram(
                 instructions = listOf(
                     CallFunctionInstruction(
                         functionId = "promptFlag",
-                        arguments = listOf(LiteralExpression(KatariValue.Text("Enable?"))),
+                        arguments = listOf(LiteralExpression(StringValue("Enable?", symbolTable()))),
                         resultTarget = ResultTarget.Slot(0),
                     ),
                 )
             ),
-            functionRegistry = functionRegistry,
+            executionEnvironment = env,
             coroutineScope = this,
         )
 
@@ -528,7 +535,7 @@ class KatariInstanceTest {
                     }
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -564,7 +571,7 @@ class KatariInstanceTest {
                     }
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -599,7 +606,7 @@ class KatariInstanceTest {
                     "after-dec:${'$'}{i}"
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -641,7 +648,7 @@ class KatariInstanceTest {
                     }
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -670,6 +677,9 @@ class KatariInstanceTest {
                 resume("Igor")
             }
         }
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+        }
         val instance = KatariInstance(
             program = KatariNarrativeProgram(
                 filename = "<Narrative>",
@@ -680,8 +690,9 @@ class KatariInstanceTest {
                         "Matched"
                     }
                 """.trimIndent(),
+                bindings = bindings
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = bindings.executionEnvironment,
             coroutineScope = this,
         )
 
@@ -691,39 +702,30 @@ class KatariInstanceTest {
 
         val task = instance.currentState().tasks.single()
         assertEquals(listOf("Matched"), events)
-        assertEquals(KatariValue.Text("Igor"), task.localVariables.getValue("name"))
-        assertEquals(KatariValue.Text("Leave"), task.localVariables.getValue("action"))
+        assertEquals(StringValue("Igor", symbolTable()), task.localVariables.getValue("name"))
+        assertEquals(StringValue("Leave", symbolTable()), task.localVariables.getValue("action"))
         assertEquals(0, task.slots.size)
-        kotlin.test.assertTrue(task.localVariables.keys.none { it.startsWith("__narrative_slot_") })
+        assertTrue(task.localVariables.keys.none { it.startsWith("__narrative_slot_") })
     }
 
     @Test
     fun runtimeMarksTaskAsFailedAndJoinCompletesOnExecutionError() = runTest {
-        val instance = KatariInstance(
-            program = KatariNarrativeProgram(
+        val error = assertFailsWith<SemanticException> {
+            KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     unknownFunction()
                     "never"
                 """.trimIndent(),
-            ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
-            coroutineScope = this,
-        )
-
-        instance.start()
-        advanceUntilIdle()
-        instance.join()
-
-        val status = instance.currentState().tasks.single().status
-        val failed = assertIs<TaskStatus.Failed>(status)
-        assertTrue(failed.message.contains("No narrative function is registered for id `unknownFunction`"))
+            )
+        }
+        assertTrue(error.message!!.contains("No matching function `unknownFunction` found"))
     }
 
     @Test
     fun runtimeErrorInsideIfConditionUsesVariableExpressionColumn() = runTest {
-        val instance = KatariInstance(
-            program = KatariNarrativeProgram(
+        val error = assertFailsWith<SemanticException> {
+            KatariNarrativeProgram(
                 filename = "<Narrative>",
                 code = """
                     fun check() {
@@ -733,19 +735,10 @@ class KatariInstanceTest {
                     }
                     check()
                 """.trimIndent(),
-            ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
-            coroutineScope = this,
-        )
-
-        instance.start()
-        advanceUntilIdle()
-        instance.join()
-
-        val status = instance.currentState().tasks.single().status
-        val failed = assertIs<TaskStatus.Failed>(status)
-        assertTrue(failed.message.contains("[<Narrative>:2:9]"))
-        assertTrue(failed.message.contains("Variable `money` is not defined"))
+            )
+        }
+        assertTrue(error.message!!.contains("[<Narrative>:2:9]"))
+        assertTrue(error.message!!.contains("Property `money` is not declared"))
     }
 
     @Test
@@ -770,7 +763,7 @@ class KatariInstanceTest {
                     greet()
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -805,7 +798,7 @@ class KatariInstanceTest {
                     "sum=${'$'}sum"
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -815,7 +808,7 @@ class KatariInstanceTest {
 
         val task = instance.currentState().tasks.single()
         assertEquals(listOf("sum=5"), events)
-        assertEquals(KatariValue.Int32(5), task.localVariables.getValue("sum"))
+        assertEquals(IntValue(5, symbolTable()), task.localVariables.getValue("sum"))
         assertTrue(task.localVariables.keys.none { it.startsWith("__narrative_fn_") })
     }
 
@@ -839,7 +832,7 @@ class KatariInstanceTest {
                     "result=${'$'}result"
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -849,8 +842,8 @@ class KatariInstanceTest {
 
         val task = instance.currentState().tasks.single()
         assertEquals(listOf("result=8"), events)
-        assertIs<KatariValue.Lambda>(task.localVariables.getValue("twice"))
-        assertEquals(KatariValue.Int32(8), task.localVariables.getValue("result"))
+        assertIs<NarrativeLambdaValue>(task.localVariables.getValue("twice"))
+        assertEquals(IntValue(8, symbolTable()), task.localVariables.getValue("result"))
     }
 
     @Test
@@ -864,7 +857,7 @@ class KatariInstanceTest {
                     "ok"
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(NarrativeNoOpHost),
             snapshotCodec = codec,
             coroutineScope = this,
         )
@@ -882,7 +875,7 @@ class KatariInstanceTest {
         val restoredLambda = restored.tasks.single().localVariables.getValue("formatter")
 
         assertIs<LambdaValueSnapshot>(lambdaSnapshot)
-        assertIs<KatariValue.Lambda>(restoredLambda)
+        assertIs<NarrativeLambdaValue>(restoredLambda)
     }
 
     @Test
@@ -896,7 +889,7 @@ class KatariInstanceTest {
                     "ok"
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(NarrativeNoOpHost),
             snapshotCodec = codec,
             coroutineScope = this,
         )
@@ -925,7 +918,7 @@ class KatariInstanceTest {
             TextValueSnapshot("Igor"),
             nameSnapshot,
         )
-        assertEquals(KatariValue.Text("Igor"), restored.tasks.single().localVariables.getValue("name"))
+        assertEquals(StringValue("Igor", symbolTable()), restored.tasks.single().localVariables.getValue("name"))
     }
 
     @Test
@@ -977,7 +970,7 @@ class KatariInstanceTest {
                     }
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -997,6 +990,10 @@ class KatariInstanceTest {
             override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = error("unused")
             override fun readLine(question: String, resume: (String) -> Unit) = resume("Иван")
         }
+        val bindings = NarrativeBindings {
+            register(NarrativeBuiltinFunctions.definitions(host))
+            install(AllStdLibModules())
+        }
         val instance = KatariInstance(
             program = KatariNarrativeProgram(
                 filename = "<Narrative>",
@@ -1006,8 +1003,9 @@ class KatariInstanceTest {
                         "ok"
                     }
                 """.trimIndent(),
+                bindings
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = bindings.executionEnvironment,
             snapshotCodec = codec,
             coroutineScope = this,
         )
@@ -1058,7 +1056,7 @@ class KatariInstanceTest {
                     }
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -1095,7 +1093,7 @@ class KatariInstanceTest {
                     }
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -1143,7 +1141,7 @@ class KatariInstanceTest {
                     "done"
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -1219,7 +1217,7 @@ class KatariInstanceTest {
                     }
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -1263,7 +1261,7 @@ class KatariInstanceTest {
                     "done"
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -1303,7 +1301,7 @@ class KatariInstanceTest {
                     "done"
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -1339,7 +1337,7 @@ class KatariInstanceTest {
                     f(42)
                 """.trimIndent(),
             ),
-            functionRegistry = NarrativeBuiltinFunctions.registry(host),
+            executionEnvironment = NarrativeBuiltinFunctions.environment(host),
             coroutineScope = this,
         )
 
@@ -1349,19 +1347,12 @@ class KatariInstanceTest {
 
         assertEquals(listOf("result: 42"), events)
     }
-}
 
-private fun builtinFunctionDefinitions(): Array<KatariFunctionDefinition> {
-    val host = object : NarrativeHost {
+    private fun recordingNoOpHost(): NarrativeHost = object : NarrativeHost {
         override fun narrate(text: String, resume: () -> Unit) = resume()
-        override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = resume(options.first().id)
+        override fun choose(options: List<ChoiceOptionSnapshot>, resume: (String) -> Unit) = resume(options.firstOrNull()?.id ?: "")
         override fun readLine(question: String, resume: (String) -> Unit) = resume("")
     }
-    val registry = NarrativeBuiltinFunctions.registry(host)
-    return arrayOf(
-        registry.definition("narrate"),
-        registry.definition("choose"),
-    )
 }
 
 @Serializable
@@ -1386,31 +1377,33 @@ class TestNpcCodec : ValueCodec<TestNpcSnapshot> {
     }
 }
 
-object PromptFlagFunction : KatariFunctionDefinition {
+object PromptFlagFunction : NarrativeCallable {
     override val id: String = "promptFlag"
-    override val signature: KatariCallableSignature = KatariCallableSignature(
-        valueParameters = listOf(KatariTypes.Text.asValueParameter("message")),
-        returnType = KatariTypes.Boolean,
+    override val receiverType: String? = null
+    override val returnType: String = "Boolean"
+    override val typeParameters: List<TypeParameter> = emptyList()
+    override val valueParameters: List<CustomFunctionParameter> = listOf(
+        CustomFunctionParameter("message", "String"),
     )
 
     override suspend fun startCall(
-        arguments: List<KatariValue>,
-        context: KatariFunctionContext,
-    ): FunctionResult {
-        return FunctionResult.Suspended
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        return NarrativeCallResult.Suspended
     }
 
     override suspend fun resumeCall(
-        arguments: List<KatariValue>,
+        arguments: List<RuntimeValue>,
         response: FunctionResponse?,
-        context: KatariFunctionContext,
-    ): FunctionResult {
-        return FunctionResult.Returned(KatariValue.Bool(true))
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        return NarrativeCallResult.Returned(BooleanValue(true, StateSnapshotCodec().symbolTable()))
     }
 
     override fun dispatch(
-        arguments: List<KatariValue>,
-        context: KatariFunctionDispatchContext,
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallDispatchContext,
         resume: (FunctionResponse?) -> Unit,
     ) {
         resume(null)

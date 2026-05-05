@@ -2,38 +2,50 @@ package com.sunnychung.lib.multiplatform.kotlite.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.Interpreter
 import com.sunnychung.lib.multiplatform.kotlite.KotliteInterpreter
-import com.sunnychung.lib.multiplatform.kotlite.model.*
+import com.sunnychung.lib.multiplatform.kotlite.evalKotliteExpression
+import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ClassModifier
+import com.sunnychung.lib.multiplatform.kotlite.model.ClassDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDeclarationNode
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
+import com.sunnychung.lib.multiplatform.kotlite.model.DataType
+import com.sunnychung.lib.multiplatform.kotlite.model.DefaultArgumentMarker
+import com.sunnychung.lib.multiplatform.kotlite.model.DelegatedValue
+import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
+import com.sunnychung.lib.multiplatform.kotlite.model.ExtensionProperty
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionResponse
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterModifier
+import com.sunnychung.lib.multiplatform.kotlite.model.GlobalProperty
+import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
+import com.sunnychung.lib.multiplatform.kotlite.model.LibraryModule
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallContext
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallDispatchContext
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallResult
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallable
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeHostValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ObjectType
+import com.sunnychung.lib.multiplatform.kotlite.model.ProvidedClassDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
+import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
+import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
+import com.sunnychung.lib.multiplatform.kotlite.model.TypeNode
+import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameter
+import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameterNode
+import com.sunnychung.lib.multiplatform.kotlite.model.UnitValue
+import com.sunnychung.lib.multiplatform.kotlite.model.toTypeNode
 import kotlinx.serialization.KSerializer
 import kotlin.reflect.KClass
 
-data class KatariType<T : Any>(
-    val kClass: KClass<T>,
-    val typeId: String,
-    val superTypes: List<KatariType<out Any>> = emptyList(),
-)
-
-fun <T : Any> KClass<T>.toKatari(
-    typeId: String = defaultTypeId(),
-    superTypes: List<KatariType<out Any>> = emptyList(),
-): KatariType<T> {
-    return KatariType(
-        kClass = this,
-        typeId = typeId,
-        superTypes = superTypes,
-    )
-}
-
-private fun KClass<*>.defaultTypeId(): String {
-    return qualifiedName ?: simpleName
-    ?: throw IllegalArgumentException("Cannot infer Kotlite type id for anonymous class `$this`")
-}
-
 data class KatariBindings(
-    val functionRegistry: KatariFunctionRegistry,
-    val propertyRegistry: KatariPropertyRegistry,
-    val snapshotCodec: StateSnapshotCodec,
-    val globals: Map<String, KatariValue>,
+    val globals: Map<String, RuntimeValue>,
     val executionEnvironment: ExecutionEnvironment,
+    val snapshotCodec: StateSnapshotCodec,
     val enumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
     val importAliases: Map<String, String> = emptyMap(),
 )
@@ -41,17 +53,16 @@ data class KatariBindings(
 class NarrativeBindingsBuilder {
     private val executionEnvironment = ExecutionEnvironment()
     private var importExecutionEnvironmentFunctions = true
-    private val functionDefinitions = mutableListOf<KatariFunctionDefinition>()
+    private val narrativeCallables = mutableListOf<NarrativeCallable>()
     private val valueCodecs = mutableListOf<ValueCodec<out ValueSnapshot>>()
-    private val globals = linkedMapOf<String, KatariValue>()
-    private val globalProperties = linkedMapOf<String, KatariGlobalPropertyDefinition>()
-    private val hostTypes = mutableListOf<KatariType<out Any>>()
+    private val globals = linkedMapOf<String, RuntimeValue>()
     private val enumDefinitions = linkedMapOf<String, KatariEnumDefinition>()
     private val importAliases = linkedMapOf<String, String>()
     private val importWildcards = mutableListOf<String>()
+    private val hostTypeIdByClass = linkedMapOf<KClass<*>, String>()
 
-    fun register(function: KatariFunctionDefinition): NarrativeBindingsBuilder = apply {
-        functionDefinitions += function
+    fun register(callable: NarrativeCallable): NarrativeBindingsBuilder = apply {
+        narrativeCallables += callable
     }
 
     fun importExecutionEnvironmentFunctions(enabled: Boolean): NarrativeBindingsBuilder = apply {
@@ -93,203 +104,166 @@ class NarrativeBindingsBuilder {
         executionEnvironment.configure()
     }
 
-    fun <T : Any> registerImmediateMember(
-        type: KatariType<T>,
-        name: String,
-        execute: suspend (
-            receiver: T,
-            arguments: List<KatariValue>,
-            context: KatariFunctionContext,
-        ) -> KatariValue = { _, _, _ -> KatariValue.Null },
-    ): NarrativeBindingsBuilder = apply {
-        register(
-            ImmediateKatariFunctionDefinition(
-                id = name,
-                signature = KatariCallableSignature(
-                    dispatchReceiverType = type.asParameterType(),
-                    returnType = KatariTypes.Unit,
-                ),
-                execute = { arguments, context ->
-                    val receiver = arguments.extractHostReceiver(type, name)
-                    execute(receiver, arguments.drop(1), context)
-                },
-            )
-        )
-    }
-
-    fun <T : Any> registerSuspendableMember(
-        type: KatariType<T>,
-        name: String,
-        onStart: suspend (
-            receiver: T,
-            arguments: List<KatariValue>,
-            context: KatariFunctionContext,
-        ) -> Unit = { _, _, _ -> },
-        onDispatch: (
-            receiver: T,
-            arguments: List<KatariValue>,
-            context: KatariFunctionDispatchContext,
-            resume: (FunctionResponse?) -> Unit,
-        ) -> Unit,
-        onResume: suspend (
-            receiver: T,
-            arguments: List<KatariValue>,
-            response: FunctionResponse?,
-            context: KatariFunctionContext,
-        ) -> KatariValue = { _, _, _, _ -> KatariValue.Null },
-    ): NarrativeBindingsBuilder = apply {
-        register(
-            SuspendableKatariFunctionDefinition(
-                id = name,
-                signature = KatariCallableSignature(
-                    dispatchReceiverType = type.asParameterType(),
-                    returnType = KatariTypes.Unit,
-                ),
-                onStart = { arguments, context ->
-                    val receiver = arguments.extractHostReceiver(type, name)
-                    onStart(receiver, arguments.drop(1), context)
-                },
-                onDispatch = { arguments, context, resume ->
-                    val receiver = arguments.extractHostReceiver(type, name)
-                    onDispatch(receiver, arguments.drop(1), context, resume)
-                },
-                onResume = { arguments, response, context ->
-                    val receiver = arguments.extractHostReceiver(type, name)
-                    onResume(receiver, arguments.drop(1), response, context)
-                },
-            )
-        )
-    }
-
-    fun registerBuiltinFunctions(host: NarrativeHost): NarrativeBindingsBuilder = apply {
-        functionDefinitions += NarrativeBuiltinFunctions.definitions(host)
-    }
-
-    fun register(functions: Iterable<KatariFunctionDefinition>): NarrativeBindingsBuilder = apply {
-        functionDefinitions += functions
-    }
-
     fun immediateFunction(
         name: String,
-        valueParameters: List<KatariValueParameter> = emptyList(),
-        dispatchReceiver: KatariParameterType? = null,
-        returnType: KatariParameterType = KatariTypes.Unit,
+        valueParameters: List<CustomFunctionParameter> = emptyList(),
+        receiverType: String? = null,
+        returnType: String = "Unit",
+        typeParameters: List<TypeParameter> = emptyList(),
+        parameterDefaults: List<RuntimeValue?> = emptyList(),
         execute: suspend (
-            receiver: KatariValue?,
-            arguments: List<KatariValue>,
-            context: KatariFunctionContext,
-        ) -> KatariValue = { _, _, _ -> KatariValue.Null },
+            arguments: List<RuntimeValue>,
+            context: NarrativeCallContext,
+        ) -> RuntimeValue = { _, _ -> NullValue },
     ): NarrativeBindingsBuilder = apply {
-        register(
-            ImmediateKatariFunctionDefinition(
-                id = name,
-                signature = KatariCallableSignature(
-                    dispatchReceiverType = dispatchReceiver,
-                    valueParameters = valueParameters,
-                    returnType = returnType,
-                ),
-                execute = { arguments, context ->
-                    val receiverOffset = if (dispatchReceiver != null) 1 else 0
-                    execute(
-                        arguments.getOrNull(0).takeIf { dispatchReceiver != null },
-                        arguments.drop(receiverOffset),
-                        context
-                    )
-                },
-            )
-        )
+        val resolvedParameterDefaults = resolveParameterDefaults(valueParameters, parameterDefaults)
+        register(object : NarrativeCallable {
+            override val id: String = name
+            override val receiverType: String? = receiverType
+            override val returnType: String = returnType
+            override val typeParameters: List<TypeParameter> = typeParameters
+            override val valueParameters: List<CustomFunctionParameter> = valueParameters
+            override val parameterDefaults: List<RuntimeValue?> = resolvedParameterDefaults
+
+            override suspend fun startCall(arguments: List<RuntimeValue>, context: NarrativeCallContext): NarrativeCallResult {
+                return NarrativeCallResult.Returned(execute(arguments, context))
+            }
+
+            override suspend fun resumeCall(
+                arguments: List<RuntimeValue>,
+                response: FunctionResponse?,
+                context: NarrativeCallContext,
+            ): NarrativeCallResult {
+                throw IllegalStateException("Immediate function `$id` cannot be resumed because it never suspends")
+            }
+
+            override fun dispatch(
+                arguments: List<RuntimeValue>,
+                context: NarrativeCallDispatchContext,
+                resume: (FunctionResponse?) -> Unit,
+            ) {
+                throw IllegalStateException("Immediate function `$id` cannot be dispatched because it never suspends")
+            }
+        })
     }
 
-    fun <T : Any> immediateMemberFunction(
-        type: KatariType<T>,
+    fun immediateMemberFunction(
+        dispatchReceiverType: String,
         name: String,
-        valueParameters: List<KatariValueParameter> = emptyList(),
-        returnType: KatariParameterType = KatariTypes.Unit,
+        valueParameters: List<CustomFunctionParameter> = emptyList(),
+        returnType: String = "Unit",
         execute: suspend (
-            receiver: T,
-            arguments: List<KatariValue>,
-            context: KatariFunctionContext,
-        ) -> KatariValue = { _, _, _ -> KatariValue.Null },
+            arguments: List<RuntimeValue>,
+            context: NarrativeCallContext,
+        ) -> RuntimeValue = { _, _ -> NullValue },
     ): NarrativeBindingsBuilder = immediateFunction(
         name = name,
         valueParameters = valueParameters,
-        dispatchReceiver = type.asParameterType(),
+        receiverType = dispatchReceiverType,
         returnType = returnType,
-        execute = { receiver, arguments, context ->
-            val hostReceiver = listOf(requireNotNull(receiver)).extractHostReceiver(type, name)
-            execute(hostReceiver, arguments, context)
-        },
+        execute = execute,
     )
 
-    fun globalProperty(
+    fun suspendableFunction(
         name: String,
-        type: KatariParameterType = KatariTypes.Any,
-        getter: (() -> KatariValue)? = null,
-        setter: ((KatariValue) -> Unit)? = null,
+        valueParameters: List<CustomFunctionParameter> = emptyList(),
+        receiverType: String? = null,
+        returnType: String = "Unit",
+        typeParameters: List<TypeParameter> = emptyList(),
+        parameterDefaults: List<RuntimeValue?> = emptyList(),
+        onStart: suspend (arguments: List<RuntimeValue>, context: NarrativeCallContext) -> Unit = { _, _ -> },
+        onDispatch: (
+            arguments: List<RuntimeValue>,
+            context: NarrativeCallDispatchContext,
+            resume: (FunctionResponse?) -> Unit,
+        ) -> Unit,
+        onResume: suspend (
+            arguments: List<RuntimeValue>,
+            response: FunctionResponse?,
+            context: NarrativeCallContext,
+        ) -> RuntimeValue = { _, _, _ -> NullValue },
     ): NarrativeBindingsBuilder = apply {
-        globalProperties[name] = KatariGlobalPropertyDefinition(name = name, type = type, getter = getter, setter = setter)
+        val resolvedParameterDefaults = resolveParameterDefaults(valueParameters, parameterDefaults)
+        register(object : NarrativeCallable {
+            override val id: String = name
+            override val receiverType: String? = receiverType
+            override val returnType: String = returnType
+            override val typeParameters: List<TypeParameter> = typeParameters
+            override val valueParameters: List<CustomFunctionParameter> = valueParameters
+            override val parameterDefaults: List<RuntimeValue?> = resolvedParameterDefaults
+
+            override suspend fun startCall(arguments: List<RuntimeValue>, context: NarrativeCallContext): NarrativeCallResult {
+                onStart(arguments, context)
+                return NarrativeCallResult.Suspended
+            }
+
+            override suspend fun resumeCall(
+                arguments: List<RuntimeValue>,
+                response: FunctionResponse?,
+                context: NarrativeCallContext,
+            ): NarrativeCallResult {
+                return NarrativeCallResult.Returned(onResume(arguments, response, context))
+            }
+
+            override fun dispatch(
+                arguments: List<RuntimeValue>,
+                context: NarrativeCallDispatchContext,
+                resume: (FunctionResponse?) -> Unit,
+            ) {
+                onDispatch(arguments, context, resume)
+            }
+        })
     }
 
-    fun extensionProperty(
-        name: String,
-        receiver: KatariParameterType,
-        valueType: KatariParameterType,
-        getter: ((receiver: KatariValue, context: KatariFunctionContext) -> KatariValue)? = null,
-        setter: ((receiver: KatariValue, value: KatariValue, context: KatariFunctionContext) -> Unit)? = null,
-    ): NarrativeBindingsBuilder = apply {
-        require(getter != null || setter != null) { "Extension property `$name` must declare getter or setter" }
-        if (getter != null) {
-            immediateFunction(
-                name = name,
-                dispatchReceiver = receiver,
-                returnType = valueType,
-                execute = { receiverValue, _, context -> getter(requireNotNull(receiverValue), context) },
-            )
-        }
-        if (setter != null) {
-            immediateFunction(
-                name = name,
-                dispatchReceiver = receiver,
-                valueParameters = listOf(valueType.asValueParameter("value")),
-                execute = { receiverValue, arguments, context ->
-                    setter(requireNotNull(receiverValue), arguments.single(), context)
-                    KatariValue.Null
-                },
-            )
-        }
+    fun registerBuiltinFunctions(host: NarrativeHost): NarrativeBindingsBuilder = apply {
+        narrativeCallables += NarrativeBuiltinFunctions.definitions(host)
     }
 
-    fun <T : Any> registerHostType(type: KatariType<T>): NarrativeBindingsBuilder = apply {
-        hostTypes += type
+    fun register(callables: Iterable<NarrativeCallable>): NarrativeBindingsBuilder = apply {
+        narrativeCallables += callables
+    }
+
+    fun <T : Any> registerHostType(
+        typeClass: KClass<T>,
+        typeId: String = typeClass.qualifiedName ?: typeClass.simpleName!!,
+        superTypeIds: List<String> = emptyList(),
+    ): NarrativeBindingsBuilder = apply {
+        hostTypeIdByClass[typeClass] = typeId
+        registerNarrativeTypeIfNeeded(typeId, superTypeIds = superTypeIds)
     }
 
     fun <T : Enum<T>> registerEnum(
-        type: KatariType<T>,
+        typeClass: KClass<T>,
+        typeId: String = typeClass.qualifiedName ?: typeClass.simpleName!!,
         values: List<T>,
     ): NarrativeBindingsBuilder = apply {
-        registerHostType(type)
-        enumDefinitions[type.typeId] = KatariEnumDefinition(
-            typeId = type.typeId,
+        hostTypeIdByClass[typeClass] = typeId
+        val st = StateSnapshotCodec(executionEnvironment = executionEnvironment).symbolTable()
+        enumDefinitions[typeId] = KatariEnumDefinition(
+            typeId = typeId,
             entries = values.map { value ->
-                KatariValue.EnumValue(
-                    typeId = type.typeId,
+                NarrativeEnumValue(
+                    typeId = typeId,
                     entryName = value.name,
                     ordinal = value.ordinal,
+                    symbolTable = st,
                 )
             },
         )
+        registerNarrativeEnumSemanticSymbols(typeId, values.map { it.name })
     }
 
     fun <T : Any, S : ValueSnapshot> registerHostType(
-        type: KatariType<T>,
+        typeClass: KClass<T>,
+        typeId: String = typeClass.qualifiedName ?: typeClass.simpleName!!,
         snapshotClass: KClass<S>,
         snapshotSerializer: KSerializer<S>,
         serialize: (T) -> S,
         deserialize: suspend (S, ValueRestoreContext) -> T,
     ): NarrativeBindingsBuilder = apply {
-        registerHostType(type)
+        registerHostType(typeClass, typeId)
         valueCodecs += object : ValueCodec<S> {
-            override val typeId: String = type.typeId
+            override val typeId: String = typeId
             override val snapshotClass: KClass<S> = snapshotClass
             override val snapshotSerializer: KSerializer<S> = snapshotSerializer
 
@@ -305,21 +279,26 @@ class NarrativeBindingsBuilder {
     }
 
     fun global(name: String, value: Any?): NarrativeBindingsBuilder = apply {
-        globals[name] = toNarrativeValue(value)
+        globals[name] = toRuntimeValue(value)
     }
 
     fun build(): KatariBindings {
         val codecRegistry = KatariValueCodecRegistry(valueCodecs)
-        val hostTypeRegistry = KatariTypeRegistry(hostTypes)
-        val bridge = if (importExecutionEnvironmentFunctions) {
-            buildExecutionEnvironmentNarrativeBridge(executionEnvironment)
-        } else {
-            null
+        val explicitGlobalNames = globals.keys.toSet()
+        val interpreter = KotliteInterpreter(
+            filename = "<NarrativeBridge>",
+            code = "",
+            executionEnvironment = executionEnvironment,
+        )
+        val eeGlobalProperties = executionEnvironment.getGlobalProperties(interpreter.symbolTable())
+        val eeGlobalPropertyNames = eeGlobalProperties.map { it.declaredName }.toSet()
+        eeGlobalProperties.forEach { property ->
+            if (property.declaredName !in globals) {
+                val value = property.getter?.invoke(interpreter) ?: return@forEach
+                globals[property.declaredName] = value
+            }
         }
-        val typeRegistry = hostTypeRegistry.mergedWith(bridge?.typeRegistry ?: KatariTypeRegistry.Empty)
-        val environmentDefinitions = bridge?.definitions ?: emptyList()
-        val environmentGlobals = bridge?.globals ?: emptyMap()
-        val baseGlobals = environmentGlobals + globals
+        val baseGlobals = globals.toMap()
         val importGlobals = importAliases.mapNotNull { (alias, target) ->
             baseGlobals[target]?.let { alias to it } ?: baseGlobals[target.substringAfterLast('.')]?.let { alias to it }
         }.toMap() + importWildcards.flatMap { prefix ->
@@ -328,55 +307,200 @@ class NarrativeBindingsBuilder {
             }
         }
         val normalizedGlobals = baseGlobals + importGlobals
-        val baseDefinitions = environmentDefinitions + functionDefinitions
-        val enumCollectionDefinitions = NarrativeBuiltinFunctions.enumCollectionDefinitions()
-            .filterNot { enumDefinition ->
-                baseDefinitions.any { definition ->
-                    definition.id == enumDefinition.id &&
-                        definition.signature.valueParameters.firstOrNull()?.type ==
-                        enumDefinition.signature.valueParameters.firstOrNull()?.type
+        normalizedGlobals.forEach { (name, value) ->
+            registerNarrativeTypeIfNeeded(value.narrativeTypeName())
+            if (name in eeGlobalPropertyNames && name !in explicitGlobalNames && name !in importGlobals.keys) {
+                return@forEach
+            }
+            executionEnvironment.registerGlobalProperty(
+                GlobalProperty(
+                    position = SourcePosition.BUILTIN,
+                    declaredName = name,
+                    type = value.narrativeTypeName(),
+                    isMutable = false,
+                    getter = { normalizedGlobals.getValue(name) },
+                    setter = null,
+                )
+            )
+        }
+
+        val existingNarrativeIds = narrativeCallables.map { it.id }.toSet()
+        val executionEnvironmentFunctionKeys = executionEnvironment
+            .getBridgeableBuiltinFunctions(interpreter.symbolTable())
+            .map { it.name to it.receiver?.name }
+            .toSet()
+        NarrativeBuiltinFunctions.definitions(NarrativeNoOpHost)
+            .filter { it.id !in existingNarrativeIds }
+            .filter { (it.id to it.receiverType?.narrativeBaseTypeId()) !in executionEnvironmentFunctionKeys }
+            .forEach { narrativeCallables += it }
+
+        narrativeCallables.forEach { callable ->
+            callable.receiverType?.let { registerNarrativeTypeIfNeeded(it) }
+            registerNarrativeTypeIfNeeded(callable.returnType)
+            callable.valueParameters.forEach { registerNarrativeTypeIfNeeded(it.type) }
+        }
+        narrativeCallables.forEach { callable ->
+            executionEnvironment.registerNarrativeCallable(callable)
+        }
+        if (importExecutionEnvironmentFunctions) {
+            val declarations = executionEnvironment.getBridgeableBuiltinFunctions(interpreter.symbolTable())
+            declarations.forEach { declaration ->
+                val callable = BridgeFunctionCallable(declaration, interpreter)
+                narrativeCallables += callable
+                executionEnvironment.registerNarrativeCallable(callable)
+            }
+
+            val extensionProperties = executionEnvironment.getExtensionProperties(interpreter.symbolTable())
+            extensionProperties.forEach { property ->
+                property.toKatariDefinitions(interpreter).forEach {
+                    narrativeCallables += it
+                    executionEnvironment.registerNarrativeCallable(it)
                 }
             }
+
+            val classes = executionEnvironment.getBuiltinClasses(interpreter.symbolTable())
+            classes.filter { it.isInstanceCreationAllowed }.forEach { clazz ->
+                val name = clazz.fullQualifiedName.removeSuffix("?").removeSuffix(".Companion")
+                if (narrativeCallables.none { it.id == name }) {
+                    val ctorCallable = BridgeConstructorCallable(name, clazz, interpreter)
+                    narrativeCallables += ctorCallable
+                    executionEnvironment.registerNarrativeCallable(ctorCallable)
+                }
+            }
+        }
+
+        val enumCollectionDefs = NarrativeBuiltinFunctions.enumCollectionDefinitions()
+            .filterNot { enumDef ->
+                narrativeCallables.any { existing ->
+                    existing.id == enumDef.id &&
+                        existing.valueParameters.firstOrNull()?.type == enumDef.valueParameters.firstOrNull()?.type
+                }
+            }
+        enumCollectionDefs.forEach {
+            narrativeCallables += it
+            executionEnvironment.registerNarrativeCallable(it)
+        }
+
         return KatariBindings(
-            functionRegistry = KatariFunctionRegistry(
-                baseDefinitions + enumCollectionDefinitions,
-                typeRegistry,
-            ),
-            propertyRegistry = KatariPropertyRegistry(globalProperties.values.toList()),
+            globals = normalizedGlobals,
+            executionEnvironment = executionEnvironment,
             snapshotCodec = StateSnapshotCodec(
                 valueCodecs = codecRegistry,
                 executionEnvironment = executionEnvironment,
             ),
-            globals = normalizedGlobals,
-            executionEnvironment = executionEnvironment,
             enumDefinitions = enumDefinitions,
             importAliases = importAliases,
         )
     }
 
-    private fun toNarrativeValue(value: Any?): KatariValue {
+    private fun registerNarrativeEnumSemanticSymbols(typeId: String, entryNames: List<String>) {
+        registerNarrativeTypeIfNeeded(typeId, modifiers = setOf(ClassModifier.enum))
+        executionEnvironment.registerExtensionProperty(
+            ExtensionProperty(
+                receiver = "$typeId.Companion",
+                declaredName = "entries",
+                type = "List<$typeId>",
+                getter = { _, _, _ -> throw UnsupportedOperationException("Katari enum entries are compiled directly") },
+            )
+        )
+        entryNames.forEach { entryName ->
+            executionEnvironment.registerExtensionProperty(
+                ExtensionProperty(
+                    receiver = "$typeId.Companion",
+                    declaredName = entryName,
+                    type = typeId,
+                    getter = { _, _, _ -> throw UnsupportedOperationException("Katari enum entries are compiled directly") },
+                )
+            )
+        }
+        executionEnvironment.registerFunction(
+            CustomFunctionDefinition(
+                position = SourcePosition.BUILTIN,
+                receiverType = "$typeId.Companion",
+                functionName = "valueOf",
+                returnType = typeId,
+                parameterTypes = listOf(CustomFunctionParameter("value", "String")),
+                executable = { _, _, _, _ ->
+                    throw UnsupportedOperationException("Katari enum valueOf is compiled directly")
+                },
+            )
+        )
+    }
+
+    private fun registerNarrativeTypeIfNeeded(
+        type: String,
+        modifiers: Set<ClassModifier> = emptySet(),
+        superTypeIds: List<String> = emptyList(),
+    ) {
+        val typeId = type.narrativeBaseTypeId() ?: return
+        if (typeId in BUILTIN_NARRATIVE_TYPE_IDS) return
+        if (executionEnvironment.findProvidedClass(typeId) != null) return
+        executionEnvironment.registerClass(
+            ProvidedClassDefinition(
+                fullQualifiedName = typeId,
+                typeParameters = emptyList(),
+                isInstanceCreationAllowed = false,
+                primaryConstructorParameters = emptyList(),
+                constructInstance = { _, _, _ -> throw UnsupportedOperationException("Narrative type `$typeId` cannot be constructed by Kotlite") },
+                modifiers = modifiers,
+                superClassInvocationString = superTypeIds.firstOrNull()?.let { "$it()" },
+                superInterfaceTypeNames = superTypeIds.drop(1),
+                position = SourcePosition.BUILTIN,
+            )
+        )
+    }
+
+    private fun resolveParameterDefaults(
+        valueParameters: List<CustomFunctionParameter>,
+        parameterDefaults: List<RuntimeValue?>,
+    ): List<RuntimeValue?> {
+        if (parameterDefaults.isNotEmpty()) return parameterDefaults
+        return valueParameters.map { parameter ->
+            parameter.defaultValueExpression?.let { expression ->
+                evalKotliteExpression(
+                    filename = "<NarrativeDefault:${parameter.name}>",
+                    code = expression,
+                    executionEnvironment = executionEnvironment,
+                )
+            }
+        }
+    }
+
+    private fun RuntimeValue.narrativeTypeName(): String {
+        return when {
+            this === NullValue -> "Any?"
+            this is NarrativeHostValue -> typeId
+            this is NarrativeEnumValue -> typeId
+            this === UnitValue -> "Unit"
+            else -> type().nameWithNullable
+        }
+    }
+
+    private fun toRuntimeValue(value: Any?): RuntimeValue {
+        val st = StateSnapshotCodec(executionEnvironment = executionEnvironment).symbolTable()
         return when (value) {
-            null -> KatariValue.Null
-            is KatariValue -> value
-            is Boolean -> KatariValue.Bool(value)
-            is Int -> KatariValue.Int32(value)
-            is Double -> KatariValue.Float64(value)
-            is String -> KatariValue.Text(value)
+            null -> NullValue
+            is RuntimeValue -> value
+            is Boolean -> BooleanValue(value, st)
+            is Int -> IntValue(value, st)
+            is Double -> DoubleValue(value, st)
+            is String -> StringValue(value, st)
             is Enum<*> -> {
-                val hostType = hostTypes.firstOrNull { it.kClass.isInstance(value) }
+                val typeId = hostTypeIdByClass[value::class]
+                    ?: value::class.qualifiedName
+                    ?: value::class.simpleName!!
+                val definition = enumDefinitions[typeId]
                     ?: throw IllegalArgumentException(
                         "No Katari enum type is registered for `${value::class.qualifiedName}`. " +
                                 "Register it with `registerEnum(...)` first."
                     )
-                enumDefinitions.getValue(hostType.typeId).entry(value.name)
+                definition.entry(value.name)
             }
             else -> {
-                val hostType = hostTypes.firstOrNull { it.kClass.isInstance(value) }
-                    ?: throw IllegalArgumentException(
-                        "No Kotlite host type is registered for `${value::class.qualifiedName}`. " +
-                                "Register `${value::class.simpleName}::class.toKotlite()` first."
-                    )
-                KatariValue.HostObject(typeId = hostType.typeId, value = value)
+                val typeId = hostTypeIdByClass[value::class]
+                    ?: value::class.qualifiedName
+                    ?: value::class.simpleName!!
+                NarrativeHostValue(typeId = typeId, value = value, symbolTable = st)
             }
         }
     }
@@ -388,267 +512,86 @@ fun NarrativeBindings(block: NarrativeBindingsBuilder.() -> Unit): KatariBinding
         .build()
 }
 
-private fun <T : Any> List<KatariValue>.extractHostReceiver(
-    type: KatariType<T>,
-    functionName: String,
-): T {
-    val receiverValue = firstOrNull()
-        ?: throw IllegalArgumentException("Member function `$functionName` expects receiver `${type.typeId}`")
-    val host = receiverValue as? KatariValue.HostObject
-        ?: throw IllegalArgumentException("Member function `$functionName` expects host receiver `${type.typeId}`, got `$receiverValue`")
-    require(host.typeId == type.typeId) {
-        "Member function `$functionName` expects receiver type `${type.typeId}`, got `${host.typeId}`"
+private class BridgeFunctionCallable(
+    val declaration: CustomFunctionDeclarationNode,
+    val interpreter: Interpreter,
+) : NarrativeCallable {
+    override val id: String = declaration.name
+    override val semanticFunctionDefinition: CustomFunctionDefinition? = null
+    override val receiverType: String? = declaration.receiver?.name
+    override val returnType: String = declaration.declaredReturnType?.name ?: "Unit"
+    override val typeParameters: List<TypeParameter> = declaration.typeParameters.map {
+        TypeParameter(it.name, it.typeUpperBound?.name)
     }
-    @Suppress("UNCHECKED_CAST")
-    return host.value as T
-}
-
-class ImmediateKatariFunctionDefinition(
-    override val id: String,
-    override val signature: KatariCallableSignature,
-    private val execute: suspend (arguments: List<KatariValue>, context: KatariFunctionContext) -> KatariValue = { _, _ ->
-        KatariValue.Null
-    },
-) : KatariFunctionDefinition {
-
-    override suspend fun startCall(
-        arguments: List<KatariValue>,
-        context: KatariFunctionContext,
-    ): FunctionResult {
-        return FunctionResult.Returned(execute(arguments, context))
+    override val valueParameters: List<CustomFunctionParameter> = declaration.valueParameters.map {
+        CustomFunctionParameter(
+            name = it.name,
+            type = it.declaredType?.let { t -> buildTypeString(t) } ?: "Any",
+            defaultValueExpression = it.defaultValue?.let { "default" },
+            modifiers = if (it.modifiers.contains(FunctionValueParameterModifier.vararg)) setOf("vararg") else emptySet(),
+        )
     }
 
-    override suspend fun resumeCall(
-        arguments: List<KatariValue>,
-        response: FunctionResponse?,
-        context: KatariFunctionContext,
-    ): FunctionResult {
-        throw IllegalStateException("Immediate function `$id` cannot be resumed because it never suspends")
-    }
-
-    override fun dispatch(
-        arguments: List<KatariValue>,
-        context: KatariFunctionDispatchContext,
-        resume: (FunctionResponse?) -> Unit,
-    ) {
-        throw IllegalStateException("Immediate function `$id` cannot be dispatched because it never suspends")
-    }
-}
-
-class SuspendableKatariFunctionDefinition(
-    override val id: String,
-    override val signature: KatariCallableSignature,
-    private val onStart: suspend (arguments: List<KatariValue>, context: KatariFunctionContext) -> Unit = { _, _ -> },
-    private val onDispatch: (
-        arguments: List<KatariValue>,
-        context: KatariFunctionDispatchContext,
-        resume: (FunctionResponse?) -> Unit,
-    ) -> Unit,
-    private val onResume: suspend (
-        arguments: List<KatariValue>,
-        response: FunctionResponse?,
-        context: KatariFunctionContext,
-    ) -> KatariValue = { _, _, _ -> KatariValue.Null },
-) : KatariFunctionDefinition {
-
-    override suspend fun startCall(
-        arguments: List<KatariValue>,
-        context: KatariFunctionContext,
-    ): FunctionResult {
-        onStart(arguments, context)
-        return FunctionResult.Suspended
-    }
-
-    override suspend fun resumeCall(
-        arguments: List<KatariValue>,
-        response: FunctionResponse?,
-        context: KatariFunctionContext,
-    ): FunctionResult {
-        return FunctionResult.Returned(onResume(arguments, response, context))
-    }
-
-    override fun dispatch(
-        arguments: List<KatariValue>,
-        context: KatariFunctionDispatchContext,
-        resume: (FunctionResponse?) -> Unit,
-    ) {
-        onDispatch(arguments, context, resume)
-    }
-}
-
-private data class ExecutionEnvironmentNarrativeBridge(
-    val definitions: List<KatariFunctionDefinition>,
-    val globals: Map<String, KatariValue>,
-    val typeRegistry: KatariTypeRegistry,
-)
-
-private fun buildExecutionEnvironmentNarrativeBridge(
-    executionEnvironment: ExecutionEnvironment,
-): ExecutionEnvironmentNarrativeBridge {
-    val interpreter = KotliteInterpreter(
-        filename = "<NarrativeBridge>",
-        code = "",
-        executionEnvironment = executionEnvironment,
-    )
-    val declarations = executionEnvironment.getBuiltinFunctions(interpreter.symbolTable())
-    val classes = executionEnvironment.getBuiltinClasses(interpreter.symbolTable())
-    val constructableClassNames = classes
-        .filter { it.isInstanceCreationAllowed }
-        .map { it.fullQualifiedName.removeSuffix("?").removeSuffix(".Companion") }
-        .distinct()
-    val extensionProperties =
-        executionEnvironment.getExtensionProperties(interpreter.symbolTable()).onEach { property ->
-            if (property.receiverType == null) {
-                property.receiverType = property.receiver.toTypeNode("<NarrativeBridge>")
+        override suspend fun startCall(arguments: List<RuntimeValue>, context: NarrativeCallContext): NarrativeCallResult {
+            val receiver = if (receiverType != null) arguments.firstOrNull() else null
+            val valueArguments = if (receiverType != null) arguments.drop(1) else arguments
+            val resolvedArgs = valueArguments.map { if (it === DefaultArgumentMarker) null else it }
+            val typeArgs: Array<TypeNode> = if (declaration.typeParameters.isNotEmpty()) {
+                val inferred = inferTypeArguments(declaration, receiver, resolvedArgs)
+                Array(inferred.size) { inferred[it] }
+            } else {
+                emptyArray()
             }
-            if (property.typeNode == null) {
-                property.typeNode = property.type.toTypeNode("<NarrativeBridge>")
-            }
-        }
-    val definitions =
-        declarations.map { declaration ->
-            ExecutionEnvironmentKatariFunctionDefinition(
-                id = declaration.name,
-                signature = declaration.toKatariSignature(),
-                interpreter = interpreter,
-                overload = declaration,
-            )
-        } +
-            extensionProperties.flatMap { property -> property.toKatariDefinitions(interpreter) } +
-            constructableClassNames.mapNotNull { name ->
-                val clazz = interpreter.symbolTable().findClass(name)?.first ?: return@mapNotNull null
-                ExecutionEnvironmentKatariFunctionDefinition(
-                    id = name,
-                    signature = clazz.toKatariConstructorSignature(),
-                    interpreter = interpreter,
-                    constructorClassName = name,
+            val args: Array<RuntimeValue?> = Array(resolvedArgs.size) { resolvedArgs[it] }
+            val result = if (receiver != null) {
+                interpreter.evalClassMemberAnyFunctionCall(
+                    position = SourcePosition.NONE,
+                    subject = receiver,
+                    function = declaration,
+                    arguments = args,
+                    typeArguments = typeArgs,
                 )
+            } else {
+                interpreter.evalFunctionCall(
+                    arguments = args,
+                    typeArguments = typeArgs,
+                    callPosition = SourcePosition.NONE,
+                    functionNode = declaration,
+                    extraScopeParameters = emptyMap(),
+                    extraTypeResolutions = emptyList(),
+                ).result
             }
-    val globals = executionEnvironment.getGlobalProperties(interpreter.symbolTable())
-        .mapNotNull { property ->
-            val getter = property.getter ?: return@mapNotNull null
-            property.declaredName to getter(interpreter).toNarrativeValue()
+            return NarrativeCallResult.Returned(result)
         }
-        .toMap()
-    return ExecutionEnvironmentNarrativeBridge(
-        definitions = definitions,
-        globals = globals,
-        typeRegistry = classes.toKatariTypeRegistry(),
-    )
-}
-
-private fun List<ClassDefinition>.toKatariTypeRegistry(): KatariTypeRegistry {
-    val directSuperTypesByTypeId = associate { clazz ->
-        clazz.fullQualifiedName to (
-            listOfNotNull(
-                clazz.superClass?.fullQualifiedName,
-                (clazz.superClassInvocation?.function as? TypeNode)?.name,
-            ) +
-                clazz.superInterfaces.map { it.fullQualifiedName } +
-                clazz.superInterfaceTypes.map { it.name }
-            )
-    }
-    return KatariTypeRegistry(directSuperTypesByTypeId)
-}
-
-private class ExecutionEnvironmentKatariFunctionDefinition(
-    override val id: String,
-    override val signature: KatariCallableSignature,
-    private val interpreter: Interpreter,
-    private val overload: FunctionDeclarationNode? = null,
-    private val property: ExtensionProperty? = null,
-    private val propertySetter: Boolean = false,
-    private val constructorClassName: String? = null,
-) : KatariFunctionDefinition {
-
-    override suspend fun startCall(
-        arguments: List<KatariValue>,
-        context: KatariFunctionContext,
-    ): FunctionResult {
-        val runtimeResult = invokeOverload(arguments)
-        return FunctionResult.Returned(runtimeResult.toNarrativeValue())
-    }
-
-    override suspend fun resumeCall(
-        arguments: List<KatariValue>,
-        response: FunctionResponse?,
-        context: KatariFunctionContext,
-    ): FunctionResult {
-        throw IllegalStateException("ExecutionEnvironment-backed function `$id` cannot be resumed because it never suspends")
-    }
-
-    override fun dispatch(
-        arguments: List<KatariValue>,
-        context: KatariFunctionDispatchContext,
-        resume: (FunctionResponse?) -> Unit,
-    ) {
-        throw IllegalStateException("ExecutionEnvironment-backed function `$id` cannot be dispatched because it never suspends")
-    }
-
-    private fun invokeOverload(arguments: List<KatariValue>): RuntimeValue {
-        if (overload != null) {
-            val (receiver, callArgs) = splitReceiver(overload, arguments)
-            val inferredTypeArguments = inferTypeArguments(overload, receiver, callArgs)
-            return interpreter.evalFunctionCall(
-                arguments = callArgs.toTypedArray(),
-                typeArguments = overload.typeParameters.mapNotNull { inferredTypeArguments[it.name] }.toTypedArray(),
-                callPosition = SourcePosition.NONE,
-                functionNode = overload,
-                extraScopeParameters = emptyMap(),
-                extraTypeResolutions = emptyList(),
-                subject = receiver,
-            ).result
-        }
-        invokePropertyIfAvailable(arguments)?.let { return it }
-        return constructorClassName?.let { invokeConstructorIfAvailable(it, arguments) }
-            ?: throw IllegalArgumentException(
-                "ExecutionEnvironment callable `$id` has no target for signature ${signature.displayName}"
-            )
-    }
-
-    private fun splitReceiver(
-        overload: FunctionDeclarationNode,
-        arguments: List<KatariValue>,
-    ): Pair<RuntimeValue?, List<RuntimeValue?>> = if (overload.receiver != null) {
-        arguments.first().toRuntimeValue(interpreter) to arguments.drop(1).map { it.toRuntimeValueOrDefault(interpreter) }
-    } else {
-        null to arguments.map { it.toRuntimeValueOrDefault(interpreter) }
-    }
 
     private fun inferTypeArguments(
-        overload: FunctionDeclarationNode,
+        declaration: FunctionDeclarationNode,
         receiver: RuntimeValue?,
         arguments: List<RuntimeValue?>,
-    ): Map<String, TypeNode> {
-        if (overload.typeParameters.isEmpty()) {
-            return emptyMap()
-        }
-
+    ): List<TypeNode> {
         val inferred = linkedMapOf<String, DataType>()
-        overload.receiver?.let { receiverType ->
-            receiver?.let { collectTypeArguments(receiverType, it.type(), overload.typeParameters, inferred) }
+        declaration.receiver?.let { receiverType ->
+            receiver?.let { collectTypeArguments(receiverType, it.type(), declaration.typeParameters, inferred) }
         }
-
-        val parameterTypes = overload.valueParameters.mapNotNull { it.declaredType }
-        if (overload.isNarrativeVararg()) {
+        val parameterTypes = declaration.valueParameters.mapNotNull { it.declaredType }
+        if (declaration.isVararg || declaration.valueParameters.firstOrNull()?.modifiers?.contains(FunctionValueParameterModifier.vararg) == true) {
             val parameterType = parameterTypes.singleOrNull()
             if (parameterType != null) {
                 arguments.forEach { argument ->
-                    argument?.let { collectTypeArguments(parameterType, it.type(), overload.typeParameters, inferred) }
+                    argument?.let { collectTypeArguments(parameterType, it.type(), declaration.typeParameters, inferred) }
                 }
             }
         } else {
             parameterTypes.zip(arguments).forEach { (parameterType, argument) ->
-                argument?.let { collectTypeArguments(parameterType, it.type(), overload.typeParameters, inferred) }
+                argument?.let { collectTypeArguments(parameterType, it.type(), declaration.typeParameters, inferred) }
             }
         }
-
-        return overload.typeParameters.associate { parameter ->
+        return declaration.typeParameters.map { parameter ->
             val inferredType = inferred[parameter.name]
                 ?: interpreter.symbolTable().assertToDataType(
                     parameter.typeUpperBound ?: TypeNode(SourcePosition.NONE, "Any", null, true)
                 )
-            parameter.name to inferredType.toTypeNode()
+            inferredType.toTypeNode()
         }
     }
 
@@ -669,7 +612,7 @@ private class ExecutionEnvironmentKatariFunctionDefinition(
             }
             return
         }
-        val actualObjectType = actualType.asObjectType() ?: return
+        val actualObjectType = actualType as? ObjectType ?: return
         val matchingType = if (declaredType.name == actualObjectType.name) {
             actualObjectType
         } else {
@@ -694,229 +637,164 @@ private class ExecutionEnvironmentKatariFunctionDefinition(
         }
     }
 
-    private fun invokeConstructorIfAvailable(name: String, arguments: List<KatariValue>): RuntimeValue? {
-        val clazz = interpreter.symbolTable().findClass(name)?.first ?: return null
-        if (!clazz.isInstanceCreationAllowed) {
-            return null
-        }
-        return clazz.construct(
+    override suspend fun resumeCall(
+        arguments: List<RuntimeValue>,
+        response: FunctionResponse?,
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        throw IllegalStateException("Bridge function `$id` cannot be resumed because it never suspends")
+    }
+
+    override fun dispatch(
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallDispatchContext,
+        resume: (FunctionResponse?) -> Unit,
+    ) {
+        throw IllegalStateException("Bridge function `$id` cannot be dispatched because it never suspends")
+    }
+}
+
+private class BridgeConstructorCallable(
+    override val id: String,
+    val clazz: ClassDefinition,
+    val interpreter: Interpreter,
+) : NarrativeCallable {
+    override val semanticFunctionDefinition: CustomFunctionDefinition? = null
+    override val receiverType: String? = null
+    override val returnType: String = id
+    override val typeParameters: List<TypeParameter> = emptyList()
+    override val valueParameters: List<CustomFunctionParameter> = clazz.primaryConstructor?.parameters.orEmpty().map { param ->
+        CustomFunctionParameter(
+            name = param.parameter.name,
+            type = param.parameter.declaredType?.name ?: "Any",
+        )
+    }
+
+    override suspend fun startCall(arguments: List<RuntimeValue>, context: NarrativeCallContext): NarrativeCallResult {
+        val result = clazz.construct(
             interpreter = interpreter,
-            callArguments = arguments.map { it.toRuntimeValue(interpreter) }.toTypedArray(),
+            callArguments = arguments.toTypedArray(),
             typeArguments = emptyArray(),
             callPosition = SourcePosition.NONE,
         )
+        return NarrativeCallResult.Returned(result)
     }
 
-    private fun invokePropertyIfAvailable(arguments: List<KatariValue>): RuntimeValue? {
-        if (property == null) {
-            return null
-        }
-        val receiver = arguments.first().toRuntimeValue(interpreter)
+    override suspend fun resumeCall(
+        arguments: List<RuntimeValue>,
+        response: FunctionResponse?,
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        throw IllegalStateException("Constructor `$id` cannot be resumed")
+    }
 
-        if (!propertySetter && receiver is ClassInstance) {
-            receiver.clazz?.findMemberPropertyTransformedName(id)?.let { transformedName ->
-                return when (val value = receiver.read(interpreter = interpreter, name = transformedName)) {
-                    is RuntimeValue -> value
-                    else -> throw UnsupportedOperationException("Unsupported member property value for `$id`")
-                }
-            }
-        }
-
-        return if (propertySetter) {
-            val setter = property.setter ?: return null
-            setter(interpreter, receiver, arguments[1].toRuntimeValue(interpreter), property.typeArgumentsMap(receiver.type()))
-            NullValue
-        } else {
-            val getter = property.getter ?: return null
-            getter(interpreter, receiver, property.typeArgumentsMap(receiver.type()))
-        }
+    override fun dispatch(
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallDispatchContext,
+        resume: (FunctionResponse?) -> Unit,
+    ) {
+        throw IllegalStateException("Constructor `$id` cannot be dispatched")
     }
 }
 
-private fun FunctionDeclarationNode.isNarrativeVararg(): Boolean {
-    return valueParameters.firstOrNull()?.modifiers?.contains(FunctionValueParameterModifier.vararg) == true
-}
+private fun ExtensionProperty.toKatariDefinitions(
+    interpreter: com.sunnychung.lib.multiplatform.kotlite.Interpreter,
+): List<NarrativeCallable> {
+    val receiverTypeStr = receiver
+    val valueTypeStr = type
+    val typeParams = typeParameters
 
-private fun FunctionDeclarationNode.toKatariSignature(): KatariCallableSignature {
-    val signatureTypeParameters = typeParameters.map { parameter ->
-        KatariTypeParameter(
-            name = parameter.name,
-            upperBound = parameter.typeUpperBound
-                ?.takeUnless { it.name == parameter.name }
-                ?.toKatariParameterType(typeParameters)
-                ?: KatariTypes.Any,
-        )
-    }
-    val signatureValueParameters = if (isNarrativeVararg()) {
-        valueParameters.singleOrNull()?.declaredType?.toKatariParameterType(typeParameters)?.repeated()
-            ?.let { listOf(it.asValueParameter(valueParameters.single().name)) }
-            ?: listOf(KatariTypes.Any.repeated().asValueParameter("args"))
-    } else {
-        valueParameters.map { parameter ->
-            KatariValueParameter(
-                name = parameter.name,
-                type = parameter.declaredType?.toKatariParameterType(typeParameters) ?: KatariTypes.Any,
-                hasDefault = parameter.defaultValue != null,
-            )
-        }
-    }
-    return KatariCallableSignature(
-        dispatchReceiverType = receiver?.toKatariParameterType(typeParameters),
-        valueParameters = signatureValueParameters,
-        typeParameters = signatureTypeParameters,
-        returnType = declaredReturnType?.toKatariParameterType(typeParameters) ?: KatariTypes.Any,
-    )
-}
-
-private fun ExtensionProperty.toKatariDefinitions(interpreter: Interpreter): List<KatariFunctionDefinition> {
-    val sourceTypeParameters = typeParameters.toTypeParameterNodes()
-    val receiver = receiverType?.toKatariParameterType(sourceTypeParameters)
-        ?: receiver.toTypeNode("<NarrativeBridge>").toKatariParameterType(sourceTypeParameters)
-    val value = typeNode?.toKatariParameterType(sourceTypeParameters)
-        ?: type.toTypeNode("<NarrativeBridge>").toKatariParameterType(sourceTypeParameters)
-    val signatureTypeParameters = typeParameters.map {
-        KatariTypeParameter(
-            name = it.name,
-            upperBound = it.typeUpperBound
-                ?.toTypeNode("<NarrativeBridge>")
-                ?.takeUnless { upperBound -> upperBound.name == it.name }
-                ?.toKatariParameterType(sourceTypeParameters)
-                ?: KatariTypes.Any,
-        )
-    }
     return listOfNotNull(
-        getter?.let {
-            ExecutionEnvironmentKatariFunctionDefinition(
-                id = declaredName,
-                signature = KatariCallableSignature(
-                    dispatchReceiverType = receiver,
-                    typeParameters = signatureTypeParameters,
-                    returnType = value,
-                ),
-                interpreter = interpreter,
-                property = this,
-            )
-        },
-        setter?.let {
-            ExecutionEnvironmentKatariFunctionDefinition(
-                id = declaredName,
-                signature = KatariCallableSignature(
-                    dispatchReceiverType = receiver,
-                    valueParameters = listOf(value.asValueParameter("value")),
-                    typeParameters = signatureTypeParameters,
-                    returnType = KatariTypes.Unit,
-                ),
-                interpreter = interpreter,
-                property = this,
-                propertySetter = true,
-            )
-        },
-    )
-}
+        getter?.let { getterFn ->
+            object : NarrativeCallable {
+                override val id: String = declaredName
+                override val semanticFunctionDefinition: CustomFunctionDefinition? = null
+                override val receiverType: String? = receiverTypeStr
+                override val returnType: String = valueTypeStr
+                override val typeParameters: List<TypeParameter> = typeParams
+                override val valueParameters: List<CustomFunctionParameter> = emptyList()
 
-private fun ClassDefinition.toKatariConstructorSignature(): KatariCallableSignature {
-    return KatariCallableSignature(
-        valueParameters = primaryConstructor?.parameters.orEmpty().map { parameter ->
-            KatariValueParameter(
-                name = parameter.parameter.name,
-                type = parameter.parameter.declaredType?.toKatariParameterType(typeParameters) ?: KatariTypes.Any,
-                hasDefault = parameter.parameter.defaultValue != null,
-            )
-        },
-        typeParameters = typeParameters.map { parameter ->
-            KatariTypeParameter(
-                name = parameter.name,
-                upperBound = parameter.typeUpperBound
-                    ?.takeUnless { it.name == parameter.name }
-                    ?.toKatariParameterType(typeParameters)
-                    ?: KatariTypes.Any,
-            )
-        },
-        returnType = KatariParameterType(fullQualifiedName),
-    )
-}
+                override suspend fun startCall(arguments: List<RuntimeValue>, context: NarrativeCallContext): NarrativeCallResult {
+                    val result = getterFn(
+                        interpreter,
+                        arguments.first(),
+                        emptyMap(),
+                    )
+                    return NarrativeCallResult.Returned(result)
+                }
 
-private fun TypeNode.toKatariParameterType(
-    typeParameters: List<TypeParameterNode> = emptyList(),
-): KatariParameterType {
-    val typeParameter = typeParameters.firstOrNull { it.name == name }
-    if (typeParameter != null) {
-        return KatariTypes.typeParameter(
-            name = typeParameter.name,
-        ).copy(isNullable = isNullable)
-    }
-    if (name == "<Repeated>") {
-        return arguments?.singleOrNull()?.toKatariParameterType(typeParameters)?.repeated()
-            ?: throw IllegalArgumentException("Repeated type `$this` must declare exactly one element type")
-    }
-    return KatariParameterType(
-        typeId = name,
-        isNullable = isNullable,
-        typeArguments = arguments.orEmpty().map { it.toKatariParameterType(typeParameters) },
-    )
-}
+                override suspend fun resumeCall(
+                    arguments: List<RuntimeValue>,
+                    response: FunctionResponse?,
+                    context: NarrativeCallContext,
+                ): NarrativeCallResult = throw IllegalStateException("Property getter cannot be resumed")
 
-private fun DataType.asObjectType(): ObjectType? {
-    return when (this) {
-        is ObjectType -> this
-        is TypeParameterType -> upperBound.asObjectType()
-        is RepeatedType -> actualTypeOrAny().asObjectType()
-        else -> null
-    }
-}
-
-private fun KatariValue.toRuntimeValue(interpreter: Interpreter): RuntimeValue {
-    val symbolTable = interpreter.symbolTable()
-    return when (this) {
-        KatariValue.DefaultArgument -> throw IllegalArgumentException("Default argument marker cannot be converted to RuntimeValue directly")
-        KatariValue.Null -> NullValue
-        is KatariValue.Bool -> BooleanValue(value, symbolTable)
-        is KatariValue.Int32 -> IntValue(value, symbolTable)
-        is KatariValue.Float64 -> DoubleValue(value, symbolTable)
-        is KatariValue.Text -> StringValue(value, symbolTable)
-        is KatariValue.Lambda -> throw IllegalArgumentException(
-            "ExecutionEnvironment bridge cannot convert Narrative lambda `$id` to RuntimeValue."
-        )
-        is KatariValue.EnumValue -> throw IllegalArgumentException(
-            "ExecutionEnvironment bridge cannot convert Katari enum `$typeId.$entryName` to RuntimeValue automatically."
-        )
-        is KatariValue.EnumEntries -> throw IllegalArgumentException(
-            "ExecutionEnvironment bridge cannot convert Katari enum entries `$typeId.entries` to RuntimeValue automatically."
-        )
-
-        is KatariValue.HostObject -> {
-            value as? RuntimeValue
-                ?: throw IllegalArgumentException(
-                    "ExecutionEnvironment bridge cannot convert HostObject(typeId=$typeId) to RuntimeValue automatically. " +
-                            "Use RuntimeValue-backed objects or narrative-native functions for this call."
-                )
-        }
-    }
-}
-
-private fun KatariValue.toRuntimeValueOrDefault(interpreter: Interpreter): RuntimeValue? {
-    return if (this == KatariValue.DefaultArgument) {
-        null
-    } else {
-        toRuntimeValue(interpreter)
-    }
-}
-
-private fun RuntimeValue.toNarrativeValue(): KatariValue {
-    return when (this) {
-        NullValue -> KatariValue.Null
-        is BooleanValue -> KatariValue.Bool(value)
-        is IntValue -> KatariValue.Int32(value)
-        is DoubleValue -> KatariValue.Float64(value)
-        is StringValue -> KatariValue.Text(value)
-        is KotlinValueHolder<*> -> {
-            if (value == null) {
-                KatariValue.Null
-            } else {
-                KatariValue.HostObject(typeId = type().name, value = this)
+                override fun dispatch(
+                    arguments: List<RuntimeValue>,
+                    context: NarrativeCallDispatchContext,
+                    resume: (FunctionResponse?) -> Unit,
+                ) = throw IllegalStateException("Property getter cannot be dispatched")
             }
-        }
+        },
+        setter?.let { setterFn ->
+            object : NarrativeCallable {
+                override val id: String = declaredName
+                override val semanticFunctionDefinition: CustomFunctionDefinition? = null
+                override val receiverType: String? = receiverTypeStr
+                override val returnType: String = "Unit"
+                override val typeParameters: List<TypeParameter> = typeParams
+                override val valueParameters: List<CustomFunctionParameter> = listOf(
+                    CustomFunctionParameter("value", valueTypeStr),
+                )
 
-        else -> KatariValue.HostObject(typeId = type().name, value = this)
-    }
+                override suspend fun startCall(arguments: List<RuntimeValue>, context: NarrativeCallContext): NarrativeCallResult {
+                    setterFn(interpreter, arguments[0], arguments[1], emptyMap())
+                    return NarrativeCallResult.Returned(NullValue)
+                }
+
+                override suspend fun resumeCall(
+                    arguments: List<RuntimeValue>,
+                    response: FunctionResponse?,
+                    context: NarrativeCallContext,
+                ): NarrativeCallResult = throw IllegalStateException("Property setter cannot be resumed")
+
+                override fun dispatch(
+                    arguments: List<RuntimeValue>,
+                    context: NarrativeCallDispatchContext,
+                    resume: (FunctionResponse?) -> Unit,
+                ) = throw IllegalStateException("Property setter cannot be dispatched")
+            }
+        },
+    )
+}
+
+private fun buildTypeString(type: com.sunnychung.lib.multiplatform.kotlite.model.TypeNode): String {
+    if (type.arguments.isNullOrEmpty()) return type.name
+    return "${type.name}<${type.arguments!!.joinToString(", ") { buildTypeString(it) }}>"
+}
+
+private val BUILTIN_NARRATIVE_TYPE_IDS = setOf(
+    "Any",
+    "Boolean",
+    "Byte",
+    "Char",
+    "Class",
+    "Double",
+    "Float",
+    "Function",
+    "Int",
+    "Long",
+    "Nothing",
+    "Short",
+    "String",
+    "Unit",
+)
+
+private fun String.narrativeBaseTypeId(): String? {
+    val withoutNullability = removeSuffix("?")
+    val withoutVararg = withoutNullability.removeSuffix("...")
+    val base = withoutVararg.substringBefore('<').trim().removeSuffix(".Companion")
+    if (base.isBlank()) return null
+    if (base.length == 1 && base.first().isUpperCase()) return null
+    return base
 }

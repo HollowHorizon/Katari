@@ -4,7 +4,10 @@ plugins {
     id("sunnychung.publication")
 }
 
-version = "1.1.2"
+version = "1.2.0"
+base {
+    archivesName.set("katari")
+}
 
 repositories {
     mavenCentral()

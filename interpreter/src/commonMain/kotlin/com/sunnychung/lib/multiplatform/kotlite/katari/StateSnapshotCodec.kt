@@ -4,13 +4,19 @@ import com.sunnychung.lib.multiplatform.kotlite.KotliteInterpreter
 import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ClassInstance
 import com.sunnychung.lib.multiplatform.kotlite.model.DataType
+import com.sunnychung.lib.multiplatform.kotlite.model.DefaultArgumentMarker
 import com.sunnychung.lib.multiplatform.kotlite.model.DelegatedValue
 import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
+import com.sunnychung.lib.multiplatform.kotlite.model.EnumEntriesIteratorValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
 import com.sunnychung.lib.multiplatform.kotlite.model.IteratorValue
 import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
 import com.sunnychung.lib.multiplatform.kotlite.model.ListValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumEntriesValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeHostValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeLambdaValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
 import com.sunnychung.lib.multiplatform.kotlite.model.PairValue
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeMapEntry
@@ -34,6 +40,8 @@ class StateSnapshotCodec(
             executionEnvironment = executionEnvironment,
         )
     }
+
+    fun symbolTable(): SymbolTable = runtimeInterpreter.symbolTable()
 
     fun serialize(state: KatariState): KatariStateSnapshot {
         val valueTable = NarrativeSnapshotValueTable()
@@ -71,14 +79,14 @@ class StateSnapshotCodec(
         context: ValueRestoreContext = EmptyValueRestoreContext,
     ): KatariState {
         StateSnapshotValidator.validate(snapshot)
-        val sharedValues = mutableMapOf<Int, KatariValue>()
+        val sharedValues = mutableMapOf<Int, RuntimeValue>()
         snapshot.values.forEach { (id, value) ->
             sharedValues[id] = restoreValue(value, context)
         }
         return KatariState(
             programVersion = snapshot.programVersion,
             tasks = snapshot.tasks.map { task ->
-                fun restoreVariables(refs: Map<String, ValueReferenceSnapshot>): Map<String, KatariValue> {
+                fun restoreVariables(refs: Map<String, ValueReferenceSnapshot>): Map<String, RuntimeValue> {
                     return refs.mapValues { (_, ref) ->
                         sharedValues.getValue(ref.valueId)
                     }
@@ -114,28 +122,28 @@ class StateSnapshotCodec(
         }
     }
 
-    private fun serializeValue(value: KatariValue): ValueSnapshot {
+    private fun serializeValue(value: RuntimeValue): ValueSnapshot {
         return when (value) {
-            KatariValue.Null -> NullValueSnapshot
-            KatariValue.DefaultArgument -> throw IllegalArgumentException("Default argument marker cannot be snapshotted")
-            is KatariValue.Bool -> BoolValueSnapshot(value.value)
-            is KatariValue.Int32 -> Int32ValueSnapshot(value.value)
-            is KatariValue.Float64 -> Float64ValueSnapshot(value.value)
-            is KatariValue.Text -> TextValueSnapshot(value.value)
-            is KatariValue.Lambda -> LambdaValueSnapshot(value.id)
-            is KatariValue.EnumValue -> EnumValueSnapshot(
+            is DefaultArgumentMarker -> throw IllegalArgumentException("Default argument marker cannot be snapshotted")
+            is NullValue -> NullValueSnapshot
+            is BooleanValue -> BoolValueSnapshot(value.value)
+            is IntValue -> Int32ValueSnapshot(value.value)
+            is DoubleValue -> Float64ValueSnapshot(value.value)
+            is StringValue -> TextValueSnapshot(value.value)
+            is NarrativeLambdaValue -> LambdaValueSnapshot(value.lambdaId)
+            is NarrativeEnumValue -> EnumValueSnapshot(
                 typeId = value.typeId,
                 entryName = value.entryName,
                 ordinal = value.ordinal,
                 properties = value.properties.mapValues { (_, propertyValue) -> serializeValue(propertyValue) },
             )
-            is KatariValue.EnumEntries -> EnumEntriesValueSnapshot(
+            is NarrativeEnumEntriesValue -> EnumEntriesValueSnapshot(
                 typeId = value.typeId,
                 entries = value.entries.map {
                     serializeValue(it) as EnumValueSnapshot
                 },
             )
-            is KatariValue.HostObject -> {
+            is NarrativeHostValue -> {
                 if (value.typeId == CHOICE_OPTION_TYPE_ID) {
                     val option = value.value as? ChoiceOptionValue
                         ?: throw IllegalArgumentException(
@@ -163,38 +171,42 @@ class StateSnapshotCodec(
                         .serialize(value.value)
                 }
             }
+            else -> serializeRuntimeValue(value)
         }
     }
 
     private suspend fun restoreValue(
         snapshot: ValueSnapshot,
         context: ValueRestoreContext,
-    ): KatariValue {
+    ): RuntimeValue {
         return when (snapshot) {
-            NullValueSnapshot -> KatariValue.Null
-            is BoolValueSnapshot -> KatariValue.Bool(snapshot.value)
-            is Int32ValueSnapshot -> KatariValue.Int32(snapshot.value)
-            is Float64ValueSnapshot -> KatariValue.Float64(snapshot.value)
-            is TextValueSnapshot -> KatariValue.Text(snapshot.value)
-            is LambdaValueSnapshot -> KatariValue.Lambda(snapshot.id)
-            is EnumValueSnapshot -> KatariValue.EnumValue(
+            NullValueSnapshot -> NullValue
+            is BoolValueSnapshot -> BooleanValue(snapshot.value, symbolTable())
+            is Int32ValueSnapshot -> IntValue(snapshot.value, symbolTable())
+            is Float64ValueSnapshot -> DoubleValue(snapshot.value, symbolTable())
+            is TextValueSnapshot -> StringValue(snapshot.value, symbolTable())
+            is LambdaValueSnapshot -> NarrativeLambdaValue(snapshot.id, symbolTable())
+            is EnumValueSnapshot -> NarrativeEnumValue(
                 typeId = snapshot.typeId,
                 entryName = snapshot.entryName,
                 ordinal = snapshot.ordinal,
                 properties = snapshot.properties.mapValues { (_, value) -> restoreValue(value, context) },
+                symbolTable = symbolTable(),
             )
-            is EnumEntriesValueSnapshot -> KatariValue.EnumEntries(
+            is EnumEntriesValueSnapshot -> NarrativeEnumEntriesValue(
                 typeId = snapshot.typeId,
-                entries = snapshot.entries.map { restoreValue(it, context) as KatariValue.EnumValue },
+                entries = snapshot.entries.map { restoreValue(it, context) as NarrativeEnumValue },
+                symbolTable = symbolTable(),
             )
-            is EnumEntriesIteratorValueSnapshot -> KatariValue.HostObject(
+            is EnumEntriesIteratorValueSnapshot -> NarrativeHostValue(
                 typeId = KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID,
                 value = EnumEntriesIteratorValue(
-                    entries = snapshot.entries.map { restoreValue(it, context) as KatariValue.EnumValue },
+                    entries = snapshot.entries.map { restoreValue(it, context) as NarrativeEnumValue },
                     index = snapshot.index,
                 ),
+                symbolTable = symbolTable(),
             )
-            is ChoiceOptionValueSnapshot -> KatariValue.HostObject(
+            is ChoiceOptionValueSnapshot -> NarrativeHostValue(
                 typeId = CHOICE_OPTION_TYPE_ID,
                 value = ChoiceOptionValue(
                     id = snapshot.id,
@@ -202,33 +214,20 @@ class StateSnapshotCodec(
                     visible = snapshot.visible,
                     enabled = snapshot.enabled,
                     disabledText = snapshot.disabledText,
-                )
+                ),
+                symbolTable = symbolTable(),
             )
-            is RuntimeListValueSnapshot -> KatariValue.HostObject(
-                typeId = snapshot.typeId,
-                value = restoreRuntimeValue(snapshot),
-            )
-            is RuntimeMapValueSnapshot -> KatariValue.HostObject(
-                typeId = snapshot.typeId,
-                value = restoreRuntimeValue(snapshot),
-            )
-            is RuntimePairValueSnapshot -> KatariValue.HostObject(
-                typeId = "Pair",
-                value = restoreRuntimeValue(snapshot),
-            )
-            is RuntimeIteratorValueSnapshot -> KatariValue.HostObject(
-                typeId = "Iterator",
-                value = restoreRuntimeValue(snapshot),
-            )
-            is RuntimeMapEntryValueSnapshot -> KatariValue.HostObject(
-                typeId = "MapEntry",
-                value = restoreRuntimeValue(snapshot),
-            )
+            is RuntimeListValueSnapshot -> restoreRuntimeValue(snapshot)
+            is RuntimeMapValueSnapshot -> restoreRuntimeValue(snapshot)
+            is RuntimePairValueSnapshot -> restoreRuntimeValue(snapshot)
+            is RuntimeIteratorValueSnapshot -> restoreRuntimeValue(snapshot)
+            is RuntimeMapEntryValueSnapshot -> restoreRuntimeValue(snapshot)
             else -> {
                 val codec = valueCodecs.codec(snapshot)
-                KatariValue.HostObject(
+                NarrativeHostValue(
                     typeId = codec.typeId,
                     value = codec.deserialize(snapshot, context),
+                    symbolTable = symbolTable(),
                 )
             }
         }
@@ -305,21 +304,21 @@ class StateSnapshotCodec(
             is StringValue -> TextValueSnapshot(value.value)
             else -> when (value.type().name) {
                 "List", "MutableList", "Set" -> {
-                    val runtimeObject = value as ClassInstance
+                    val delegated = value as? DelegatedValue<*> ?: value as ClassInstance
                     val holder = value as KotlinValueHolder<*>
                     RuntimeListValueSnapshot(
                         typeId = value.type().name,
-                        elementType = (runtimeObject.typeArguments.singleOrNull() ?: runtimeSymbolTable().AnyType).descriptiveName,
+                        elementType = (delegated.typeArguments.singleOrNull() ?: symbolTable().AnyType).descriptiveName,
                         elements = (holder.value as Iterable<*>).map { serializeRuntimeValue(it as RuntimeValue) },
                     )
                 }
                 "Map", "MutableMap" -> {
-                    val runtimeObject = value as ClassInstance
+                    val delegated = value as? DelegatedValue<*> ?: value as ClassInstance
                     val holder = value as KotlinValueHolder<*>
                     RuntimeMapValueSnapshot(
                         typeId = value.type().name,
-                        keyType = (runtimeObject.typeArguments.getOrNull(0) ?: runtimeSymbolTable().AnyType).descriptiveName,
-                        valueType = (runtimeObject.typeArguments.getOrNull(1) ?: runtimeSymbolTable().AnyType).descriptiveName,
+                        keyType = (delegated.typeArguments.getOrNull(0) ?: symbolTable().AnyType).descriptiveName,
+                        valueType = (delegated.typeArguments.getOrNull(1) ?: symbolTable().AnyType).descriptiveName,
                         entries = (holder.value as Map<*, *>).entries.map { (key, entryValue) ->
                             RuntimeMapEntrySnapshot(
                                 key = serializeRuntimeValue(key as RuntimeValue),
@@ -329,31 +328,34 @@ class StateSnapshotCodec(
                     )
                 }
                 "Pair" -> {
-                    val runtimeObject = value as ClassInstance
-                    val pair = (value as KotlinValueHolder<*>).value as Pair<*, *>
+                    val delegated = value as? DelegatedValue<*> ?: value as ClassInstance
+                    val holder = value as KotlinValueHolder<*>
+                    val pair = holder.value as Pair<*, *>
                     RuntimePairValueSnapshot(
-                        firstType = (runtimeObject.typeArguments.getOrNull(0) ?: runtimeSymbolTable().AnyType).descriptiveName,
-                        secondType = (runtimeObject.typeArguments.getOrNull(1) ?: runtimeSymbolTable().AnyType).descriptiveName,
+                        firstType = (delegated.typeArguments.getOrNull(0) ?: symbolTable().AnyType).descriptiveName,
+                        secondType = (delegated.typeArguments.getOrNull(1) ?: symbolTable().AnyType).descriptiveName,
                         first = serializeRuntimeValue(pair.first as RuntimeValue),
                         second = serializeRuntimeValue(pair.second as RuntimeValue),
                     )
                 }
                 "MapEntry" -> {
-                    val runtimeObject = value as ClassInstance
-                    val entry = (value as KotlinValueHolder<*>).value as Map.Entry<*, *>
+                    val delegated = value as? DelegatedValue<*> ?: value as ClassInstance
+                    val holder = value as KotlinValueHolder<*>
+                    val entry = holder.value as Map.Entry<*, *>
                     RuntimeMapEntryValueSnapshot(
-                        keyType = (runtimeObject.typeArguments.getOrNull(0) ?: runtimeSymbolTable().AnyType).descriptiveName,
-                        valueType = (runtimeObject.typeArguments.getOrNull(1) ?: runtimeSymbolTable().AnyType).descriptiveName,
+                        keyType = (delegated.typeArguments.getOrNull(0) ?: symbolTable().AnyType).descriptiveName,
+                        valueType = (delegated.typeArguments.getOrNull(1) ?: symbolTable().AnyType).descriptiveName,
                         key = serializeRuntimeValue(entry.key as RuntimeValue),
                         value = serializeRuntimeValue(entry.value as RuntimeValue),
                     )
                 }
                 "Iterator" -> {
-                    val runtimeObject = value as ClassInstance
-                    val iterator = (value as KotlinValueHolder<*>).value as? RuntimeValueSnapshotIterator
+                    val delegated = value as? DelegatedValue<*> ?: value as ClassInstance
+                    val holder = value as KotlinValueHolder<*>
+                    val iterator = holder.value as? RuntimeValueSnapshotIterator
                         ?: throw IllegalArgumentException("Runtime iterator `${value.type().descriptiveName}` is not snapshot-safe")
                     RuntimeIteratorValueSnapshot(
-                        elementType = (runtimeObject.typeArguments.singleOrNull() ?: runtimeSymbolTable().AnyType).descriptiveName,
+                        elementType = (delegated.typeArguments.singleOrNull() ?: symbolTable().AnyType).descriptiveName,
                         elements = iterator.remainingElements().map { serializeRuntimeValue(it) },
                     )
                 }
@@ -363,7 +365,7 @@ class StateSnapshotCodec(
     }
 
     private fun restoreRuntimeValue(snapshot: ValueSnapshot): RuntimeValue {
-        val symbolTable = runtimeSymbolTable()
+        val symbolTable = symbolTable()
         return when (snapshot) {
             NullValueSnapshot -> NullValue
             is BoolValueSnapshot -> BooleanValue(snapshot.value, symbolTable)
@@ -442,29 +444,27 @@ class StateSnapshotCodec(
     }
 
     private fun runtimeDataType(type: String): DataType {
-        return runtimeSymbolTable().assertToDataType(type.toTypeNode("<NarrativeSnapshot>"))
+        return symbolTable().assertToDataType(type.toTypeNode("<NarrativeSnapshot>"))
     }
-
-    private fun runtimeSymbolTable(): SymbolTable = runtimeInterpreter.symbolTable()
 }
 
 private class NarrativeSnapshotValueTable {
-    private val entries = mutableListOf<KatariValue>()
+    private val entries = mutableListOf<RuntimeValue>()
 
-    val values: Map<Int, KatariValue>
+    val values: Map<Int, RuntimeValue>
         get() = entries.withIndex().associate { it.index to it.value }
 
-    fun reference(value: KatariValue): ValueReferenceSnapshot {
+    fun reference(value: RuntimeValue): ValueReferenceSnapshot {
         val index = entries.indexOfFirst { existing -> existing.hasSameSnapshotIdentityAs(value) }
             .takeIf { it >= 0 }
             ?: entries.size.also { entries += value }
         return ValueReferenceSnapshot(index)
     }
 
-    private fun KatariValue.hasSameSnapshotIdentityAs(other: KatariValue): Boolean {
+    private fun RuntimeValue.hasSameSnapshotIdentityAs(other: RuntimeValue): Boolean {
         return this === other || (
-            this is KatariValue.HostObject &&
-                other is KatariValue.HostObject &&
+            this is NarrativeHostValue &&
+                other is NarrativeHostValue &&
                 typeId == other.typeId &&
                 value === other.value
             )

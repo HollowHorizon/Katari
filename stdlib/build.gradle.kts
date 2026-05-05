@@ -6,7 +6,10 @@ plugins {
     id("io.github.sunny-chung.kotlite-stdlib-processor-plugin") version "1.0.0"
 }
 
-version = "1.1.0"
+version = "1.2.0"
+base {
+    archivesName.set("katari-stdlib")
+}
 
 repositories {
     mavenCentral()
@@ -15,7 +18,6 @@ repositories {
 kotlin {
     jvm {
         jvmToolchain(8)
-//        withJava()
         testRuns.named("test") {
             executionTask.configure {
                 useJUnitPlatform()
@@ -31,29 +33,18 @@ kotlin {
             }
             testTask {
                 useMocha {
-                    timeout = "21s" // github mac runner is slow
+                    timeout = "21s"
                 }
             }
         }
         nodejs {
             testTask {
                 useMocha {
-                    timeout = "21s" // github mac runner is slow
+                    timeout = "21s"
                 }
             }
         }
     }
-//    val hostOs = System.getProperty("os.name")
-//    val isArm64 = System.getProperty("os.arch") == "aarch64"
-//    val isMingwX64 = hostOs.startsWith("Windows")
-//    val nativeTarget = when {
-//        hostOs == "Mac OS X" && isArm64 -> macosArm64("native")
-//        hostOs == "Mac OS X" && !isArm64 -> macosX64("native")
-//        hostOs == "Linux" && isArm64 -> linuxArm64("native")
-//        hostOs == "Linux" && !isArm64 -> linuxX64("native")
-//        isMingwX64 -> mingwX64("native")
-//        else -> throw GradleException("Host OS is not supported in Kotlin/Native.")
-//    }
 
     val darwinTargets = listOf(
         iosArm64(),
@@ -77,7 +68,6 @@ kotlin {
                 implementation("io.github.sunny-chung:kdatetime-multiplatform:1.0.0")
                 implementation("com.benasher44:uuid:0.8.4")
             }
-//            kotlin.srcDir("build/generated/common/")
             kotlin.srcDir(tasks.named("kotliteStdlibHeaderProcess").map { it.outputs })
         }
         val commonTest by getting {
@@ -85,12 +75,6 @@ kotlin {
                 implementation(kotlin("test"))
             }
         }
-        val jvmMain by getting
-        val jvmTest by getting
-        val jsMain by getting
-        val jsTest by getting
-//        val nativeMain by getting
-//        val nativeTest by getting
 
         val darwinMain by creating {
             dependsOn(commonMain)

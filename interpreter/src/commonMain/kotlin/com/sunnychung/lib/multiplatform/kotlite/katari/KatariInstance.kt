@@ -1,6 +1,27 @@
 package com.sunnychung.lib.multiplatform.kotlite.katari
 
+import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
+import com.sunnychung.lib.multiplatform.kotlite.model.DefaultArgumentMarker
+import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
+import com.sunnychung.lib.multiplatform.kotlite.model.EnumEntriesIteratorValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionResponse
+import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
+import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallContext
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallDispatchContext
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallResult
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallable
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumEntriesValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeHostValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeLambdaValue
+import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
+import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -18,9 +39,8 @@ class KatariInstance(
         programVersion = program.version,
         tasks = listOf(TaskState(id = program.entryTaskId)),
     ),
-    private val functionRegistry: KatariFunctionRegistry = NarrativeBuiltinFunctions.registry(NarrativeNoOpHost),
-    private val propertyRegistry: KatariPropertyRegistry = KatariPropertyRegistry(),
-    private val snapshotCodec: StateSnapshotCodec = StateSnapshotCodec(),
+    private val executionEnvironment: ExecutionEnvironment = ExecutionEnvironment(),
+    private val snapshotCodec: StateSnapshotCodec = StateSnapshotCodec(executionEnvironment = executionEnvironment),
     coroutineScope: CoroutineScope? = null,
 ) {
     companion object {
@@ -176,7 +196,7 @@ class KatariInstance(
                             }
                             is ExitCallFrameInstruction -> {
                                 val returnValue = instruction.returnExpression?.let { evaluateExpression(currentState, task, it) }
-                                    ?: KatariValue.Null
+                                    ?: NullValue
                                 currentState = currentState.updateTask(
                                     index = taskIndex,
                                     task = applyExitCallFrameInstruction(task, instruction, returnValue),
@@ -228,12 +248,12 @@ class KatariInstance(
         task: TaskState,
         instruction: CallFunctionInstruction,
     ): FunctionDispatchRequest? {
-        val call = resolveFunctionCall(task, instruction)
+        val resolved = resolveNarrativeCall(instruction.functionId, instruction, task)
         val referencedSlots = collectReferencedSlots(instruction.arguments)
-        val definition = call.definition
-        val arguments = call.arguments
-        return when (val result = definition.startCall(arguments, DefaultKatariFunctionContext(currentState, task))) {
-            is FunctionResult.Returned -> {
+        val definition = resolved.callable
+        val arguments = resolved.arguments
+        return when (val result = definition.startCall(arguments, KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task))) {
+            is NarrativeCallResult.Returned -> {
                 currentState = currentState.updateTask(
                     index = taskIndex,
                     task = cleanupSlots(
@@ -248,7 +268,7 @@ class KatariInstance(
                 )
                 null
             }
-            FunctionResult.Suspended -> {
+            NarrativeCallResult.Suspended -> {
                 val suspendedStatus = TaskStatus.SuspendedCall(
                     resultTarget = instruction.resultTarget,
                     nextInstructionPointer = task.instructionPointer + 1,
@@ -262,6 +282,21 @@ class KatariInstance(
         }
     }
 
+    private fun resolveNarrativeCall(
+        functionId: String,
+        instruction: CallFunctionInstruction,
+        task: TaskState,
+    ): ResolvedCall {
+        val argumentNames = instruction.argumentNames.takeIf { it.isNotEmpty() }
+            ?: List(instruction.arguments.size) { null }
+        require(argumentNames.size == instruction.arguments.size) {
+            "Call `$functionId` has ${instruction.arguments.size} arguments but ${argumentNames.size} argument names"
+        }
+        val args = instruction.arguments.map { evaluateExpression(currentState, task, it) }
+        val (callable, normalizedArgs) = executionEnvironment.resolveNarrativeCallable(functionId, args, argumentNames)
+        return ResolvedCall(callable = callable, arguments = normalizedArgs)
+    }
+
     private suspend fun dispatchSuspendedCall(request: FunctionDispatchRequest) {
         val dispatchData = mutex.withLock {
             if (request.taskId in inFlightTasks) return
@@ -270,12 +305,12 @@ class KatariInstance(
             }?.let { normalizeTask(it) } ?: return
             inFlightTasks += request.taskId
             val instruction = resolveSuspendedCallInstruction(task)
-            val call = resolveFunctionCall(task, instruction)
+            val resolved = resolveNarrativeCall(instruction.functionId, instruction, task)
             DispatchData(
                 taskId = task.id,
-                arguments = call.arguments,
-                definition = call.definition,
-                context = DefaultKatariFunctionContext(currentState, task),
+                arguments = resolved.arguments,
+                definition = resolved.callable,
+                context = KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task),
             )
         }
 
@@ -317,17 +352,17 @@ class KatariInstance(
             val task = normalizeTask(currentState.tasks[taskIndex])
             val status = task.status as TaskStatus.SuspendedCall
             val instruction = resolveSuspendedCallInstruction(task)
-            val call = resolveFunctionCall(task, instruction)
+            val resolved = resolveNarrativeCall(instruction.functionId, instruction, task)
             val referencedSlots = collectReferencedSlots(instruction.arguments)
-            val definition = call.definition
-            val arguments = call.arguments
+            val definition = resolved.callable
+            val arguments = resolved.arguments
             try {
                 when (val result = definition.resumeCall(
                     arguments = arguments,
                     response = response,
-                    context = DefaultKatariFunctionContext(currentState, task),
+                    context = KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task),
                 )) {
-                    is FunctionResult.Returned -> {
+                    is NarrativeCallResult.Returned -> {
                         currentState = currentState.updateTask(
                             index = taskIndex,
                             task = cleanupSlots(
@@ -341,7 +376,7 @@ class KatariInstance(
                             ),
                         )
                     }
-                    FunctionResult.Suspended -> {
+                    NarrativeCallResult.Suspended -> {
                         currentState = currentState.updateTask(
                             index = taskIndex,
                             task = task,
@@ -386,17 +421,6 @@ class KatariInstance(
         instruction: SetVariableInstruction,
     ): TaskState {
         val value = evaluateExpression(currentState, task, instruction.expression)
-        if (!instruction.declaresLocal && findFrameVariable(task, currentCallFrame(task).id, instruction.name) == null) {
-            val nextTask = propertyRegistry.setGlobal(instruction.name, value)?.let {
-                task.copy(
-                    instructionPointer = task.instructionPointer + 1,
-                    slots = if (instruction.expression is SlotExpression) task.slots - instruction.expression.slot else task.slots,
-                )
-            }
-            if (nextTask != null) {
-                return syncTopLocals(nextTask)
-            }
-        }
         val frame = currentCallFrame(task)
         val updated = frame.copy(localVariables = frame.localVariables + (instruction.name to value))
         return syncTopLocals(
@@ -411,19 +435,12 @@ class KatariInstance(
     private fun applyResultTarget(
         task: TaskState,
         resultTarget: ResultTarget?,
-        value: KatariValue,
+        value: RuntimeValue,
         nextInstructionPointer: Int,
     ): TaskState {
         return when (resultTarget) {
             null -> task.copy(instructionPointer = nextInstructionPointer)
             is ResultTarget.Variable -> {
-                if (
-                    !resultTarget.declaresLocal &&
-                    findFrameVariable(task, currentCallFrame(task).id, resultTarget.name) == null &&
-                    propertyRegistry.setGlobal(resultTarget.name, value) != null
-                ) {
-                    return task.copy(instructionPointer = nextInstructionPointer)
-                }
                 val frame = currentCallFrame(task)
                 val updated = frame.copy(localVariables = frame.localVariables + (resultTarget.name to value))
                 syncTopLocals(task.copy(instructionPointer = nextInstructionPointer, callFrames = task.callFrames.replaceLast(updated)))
@@ -502,60 +519,33 @@ class KatariInstance(
             ?: throw IllegalStateException("Task `${task.id}` is suspended at instruction ${task.instructionPointer}, but no function call exists there")
     }
 
-    private fun evaluateArguments(
-        task: TaskState,
-        instruction: CallFunctionInstruction,
-    ): List<KatariValue> {
-        return instruction.arguments.map { evaluateExpression(currentState, task, it) }
-    }
-
-    private fun resolveFunctionCall(
-        task: TaskState,
-        instruction: CallFunctionInstruction,
-    ): KatariResolvedFunctionCall {
-        val argumentNames = instruction.argumentNames.takeIf { it.isNotEmpty() }
-            ?: List(instruction.arguments.size) { null }
-        require(argumentNames.size == instruction.arguments.size) {
-            "Call `${instruction.functionId}` has ${instruction.arguments.size} arguments but ${argumentNames.size} argument names"
-        }
-        return functionRegistry.resolve(
-            id = instruction.functionId,
-            arguments = instruction.arguments.mapIndexed { index, expression ->
-                KatariCallArgument(
-                    name = argumentNames[index],
-                    value = evaluateExpression(currentState, task, expression),
-                )
-            },
-        )
-    }
-
     private fun evaluateExpression(
         state: KatariState,
         task: TaskState,
         expression: KatariExpression,
-    ): KatariValue {
+    ): RuntimeValue {
         try {
             return when (expression) {
                 is LiteralExpression -> expression.value
                 is VariableExpression -> resolveVariableValue(state, task, expression.name)
                 is SlotExpression -> resolveSlotValue(state, task, expression.slot)
-                is LambdaLiteralExpression -> KatariValue.Lambda(expression.lambdaId)
+                is LambdaLiteralExpression -> NarrativeLambdaValue(expression.lambdaId, snapshotCodec.symbolTable())
                 is EnumEntryExpression -> program.enumDefinitions.getValue(expression.typeId).entry(expression.entryName)
                 is EnumEntriesExpression -> {
                     val definition = program.enumDefinitions.getValue(expression.typeId)
-                    KatariValue.EnumEntries(typeId = expression.typeId, entries = definition.entries)
+                    NarrativeEnumEntriesValue(typeId = expression.typeId, entries = definition.entries, symbolTable = snapshotCodec.symbolTable())
                 }
                 is EnumValueOfExpression -> {
-                    val entryName = evaluateExpression(state, task, expression.entryName) as? KatariValue.Text
+                    val entryName = evaluateExpression(state, task, expression.entryName) as? StringValue
                         ?: throw IllegalArgumentException("Enum valueOf expects String argument")
                     program.enumDefinitions.getValue(expression.typeId).entry(entryName.value)
                 }
                 is EnumPropertyExpression -> {
-                    val receiver = evaluateExpression(state, task, expression.receiver) as? KatariValue.EnumValue
+                    val receiver = evaluateExpression(state, task, expression.receiver) as? NarrativeEnumValue
                         ?: throw IllegalArgumentException("Enum property `${expression.propertyName}` expects enum receiver")
                     when (expression.propertyName) {
-                        "name" -> KatariValue.Text(receiver.entryName)
-                        "ordinal" -> KatariValue.Int32(receiver.ordinal)
+                        "name" -> StringValue(receiver.entryName, snapshotCodec.symbolTable())
+                        "ordinal" -> IntValue(receiver.ordinal, snapshotCodec.symbolTable())
                         else -> receiver.properties[expression.propertyName]
                             ?: throw IllegalArgumentException(
                                 "Enum `${receiver.typeId}` has no property `${expression.propertyName}`"
@@ -565,9 +555,9 @@ class KatariInstance(
                 is UnaryExpression -> {
                     val operand = evaluateExpression(state, task, expression.operand)
                     when (expression.operator) {
-                        UnaryOperator.Plus -> operand.numericIdentity()
+                        UnaryOperator.Plus -> operand
                         UnaryOperator.Minus -> operand.negateNumeric()
-                        UnaryOperator.Not -> KatariValue.Bool(!operand.asBoolean())
+                        UnaryOperator.Not -> BooleanValue(!operand.asBoolean(), snapshotCodec.symbolTable())
                     }
                 }
                 is BinaryExpression -> {
@@ -575,82 +565,82 @@ class KatariInstance(
                     when (expression.operator) {
                         BinaryOperator.Add -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is KatariValue.Text || right is KatariValue.Text) {
-                                KatariValue.Text(left.asString() + right.asString())
-                            } else if (left is KatariValue.Float64 || right is KatariValue.Float64) {
-                                KatariValue.Float64(left.asDouble() + right.asDouble())
+                            if (left is StringValue || right is StringValue) {
+                                StringValue(left.asString() + right.asString(), snapshotCodec.symbolTable())
+                            } else if (left is DoubleValue || right is DoubleValue) {
+                                DoubleValue(left.asDouble() + right.asDouble(), snapshotCodec.symbolTable())
                             } else {
-                                KatariValue.Int32(left.asInt() + right.asInt())
+                                IntValue(left.asInt() + right.asInt(), snapshotCodec.symbolTable())
                             }
                         }
                         BinaryOperator.Subtract -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is KatariValue.Float64 || right is KatariValue.Float64) {
-                                KatariValue.Float64(left.asDouble() - right.asDouble())
+                            if (left is DoubleValue || right is DoubleValue) {
+                                DoubleValue(left.asDouble() - right.asDouble(), snapshotCodec.symbolTable())
                             } else {
-                        KatariValue.Int32(left.asInt() - right.asInt())
-                    }
-                }
-                BinaryOperator.Multiply -> {
-                    val right = evaluateExpression(state, task, expression.right)
-                    if (left is KatariValue.Float64 || right is KatariValue.Float64) {
-                        KatariValue.Float64(left.asDouble() * right.asDouble())
-                    } else {
-                        KatariValue.Int32(left.asInt() * right.asInt())
-                    }
-                }
-                BinaryOperator.Divide -> {
-                    val right = evaluateExpression(state, task, expression.right)
-                    if (left is KatariValue.Float64 || right is KatariValue.Float64) {
-                        KatariValue.Float64(left.asDouble() / right.asDouble())
-                    } else {
-                        KatariValue.Int32(left.asInt() / right.asInt())
-                    }
-                }
-                BinaryOperator.Remainder -> {
-                    val right = evaluateExpression(state, task, expression.right)
-                    if (left is KatariValue.Float64 || right is KatariValue.Float64) {
-                        KatariValue.Float64(left.asDouble() % right.asDouble())
-                    } else {
-                        KatariValue.Int32(left.asInt() % right.asInt())
-                    }
-                }
-                BinaryOperator.LessThan -> {
-                    val right = evaluateExpression(state, task, expression.right)
-                    if (left is KatariValue.Float64 || right is KatariValue.Float64) {
-                                KatariValue.Bool(left.asDouble() < right.asDouble())
+                                IntValue(left.asInt() - right.asInt(), snapshotCodec.symbolTable())
+                            }
+                        }
+                        BinaryOperator.Multiply -> {
+                            val right = evaluateExpression(state, task, expression.right)
+                            if (left is DoubleValue || right is DoubleValue) {
+                                DoubleValue(left.asDouble() * right.asDouble(), snapshotCodec.symbolTable())
                             } else {
-                                KatariValue.Bool(left.asInt() < right.asInt())
+                                IntValue(left.asInt() * right.asInt(), snapshotCodec.symbolTable())
+                            }
+                        }
+                        BinaryOperator.Divide -> {
+                            val right = evaluateExpression(state, task, expression.right)
+                            if (left is DoubleValue || right is DoubleValue) {
+                                DoubleValue(left.asDouble() / right.asDouble(), snapshotCodec.symbolTable())
+                            } else {
+                                IntValue(left.asInt() / right.asInt(), snapshotCodec.symbolTable())
+                            }
+                        }
+                        BinaryOperator.Remainder -> {
+                            val right = evaluateExpression(state, task, expression.right)
+                            if (left is DoubleValue || right is DoubleValue) {
+                                DoubleValue(left.asDouble() % right.asDouble(), snapshotCodec.symbolTable())
+                            } else {
+                                IntValue(left.asInt() % right.asInt(), snapshotCodec.symbolTable())
+                            }
+                        }
+                        BinaryOperator.LessThan -> {
+                            val right = evaluateExpression(state, task, expression.right)
+                            if (left is DoubleValue || right is DoubleValue) {
+                                BooleanValue(left.asDouble() < right.asDouble(), snapshotCodec.symbolTable())
+                            } else {
+                                BooleanValue(left.asInt() < right.asInt(), snapshotCodec.symbolTable())
                             }
                         }
                         BinaryOperator.LessThanOrEquals -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is KatariValue.Float64 || right is KatariValue.Float64) {
-                                KatariValue.Bool(left.asDouble() <= right.asDouble())
+                            if (left is DoubleValue || right is DoubleValue) {
+                                BooleanValue(left.asDouble() <= right.asDouble(), snapshotCodec.symbolTable())
                             } else {
-                                KatariValue.Bool(left.asInt() <= right.asInt())
+                                BooleanValue(left.asInt() <= right.asInt(), snapshotCodec.symbolTable())
                             }
                         }
                         BinaryOperator.GreaterThan -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is KatariValue.Float64 || right is KatariValue.Float64) {
-                                KatariValue.Bool(left.asDouble() > right.asDouble())
+                            if (left is DoubleValue || right is DoubleValue) {
+                                BooleanValue(left.asDouble() > right.asDouble(), snapshotCodec.symbolTable())
                             } else {
-                                KatariValue.Bool(left.asInt() > right.asInt())
+                                BooleanValue(left.asInt() > right.asInt(), snapshotCodec.symbolTable())
                             }
                         }
                         BinaryOperator.GreaterThanOrEquals -> {
                             val right = evaluateExpression(state, task, expression.right)
-                            if (left is KatariValue.Float64 || right is KatariValue.Float64) {
-                                KatariValue.Bool(left.asDouble() >= right.asDouble())
+                            if (left is DoubleValue || right is DoubleValue) {
+                                BooleanValue(left.asDouble() >= right.asDouble(), snapshotCodec.symbolTable())
                             } else {
-                                KatariValue.Bool(left.asInt() >= right.asInt())
+                                BooleanValue(left.asInt() >= right.asInt(), snapshotCodec.symbolTable())
                             }
                         }
-                        BinaryOperator.Equals -> KatariValue.Bool(left == evaluateExpression(state, task, expression.right))
-                        BinaryOperator.NotEquals -> KatariValue.Bool(left != evaluateExpression(state, task, expression.right))
-                        BinaryOperator.And -> KatariValue.Bool(left.asBoolean() && evaluateExpression(state, task, expression.right).asBoolean())
-                        BinaryOperator.Or -> KatariValue.Bool(left.asBoolean() || evaluateExpression(state, task, expression.right).asBoolean())
+                        BinaryOperator.Equals -> BooleanValue(left == evaluateExpression(state, task, expression.right), snapshotCodec.symbolTable())
+                        BinaryOperator.NotEquals -> BooleanValue(left != evaluateExpression(state, task, expression.right), snapshotCodec.symbolTable())
+                        BinaryOperator.And -> BooleanValue(left.asBoolean() && evaluateExpression(state, task, expression.right).asBoolean(), snapshotCodec.symbolTable())
+                        BinaryOperator.Or -> BooleanValue(left.asBoolean() || evaluateExpression(state, task, expression.right).asBoolean(), snapshotCodec.symbolTable())
                     }
                 }
             }
@@ -668,13 +658,12 @@ class KatariInstance(
         }
     }
 
-    private fun resolveVariableValue(state: KatariState, task: TaskState, name: String): KatariValue {
+    private fun resolveVariableValue(state: KatariState, task: TaskState, name: String): RuntimeValue {
         val frameValue = findFrameVariable(task, currentCallFrame(task).id, name)
         if (frameValue != null) {
             return frameValue.second
         }
         return state.globals[name]
-            ?: propertyRegistry.getGlobal(name)
             ?: throw IllegalArgumentException("Variable `$name` is not defined")
     }
 
@@ -690,13 +679,10 @@ class KatariInstance(
         if (name in state.globals) {
             return SlotValue.VariableReference(name = name, frameId = null)
         }
-        if (propertyRegistry.hasGlobal(name)) {
-            return SlotValue.VariableReference(name = name, frameId = null)
-        }
         throw IllegalArgumentException("Variable `$name` is not defined")
     }
 
-    private fun resolveSlotValue(state: KatariState, task: TaskState, slot: Int): KatariValue {
+    private fun resolveSlotValue(state: KatariState, task: TaskState, slot: Int): RuntimeValue {
         val reference = task.slots[slot] as? SlotValue.VariableReference
             ?: throw IllegalArgumentException("Slot `$slot` is not defined")
         return resolveReferenceValue(state, task, reference)
@@ -706,10 +692,9 @@ class KatariInstance(
         state: KatariState,
         task: TaskState,
         reference: SlotValue.VariableReference,
-    ): KatariValue {
+    ): RuntimeValue {
         return if (reference.frameId == null) {
             state.globals[reference.name]
-                ?: propertyRegistry.getGlobal(reference.name)
                 ?: throw IllegalArgumentException("Global variable `${reference.name}` is not defined")
         } else {
             findFrameById(task, reference.frameId)
@@ -719,7 +704,7 @@ class KatariInstance(
         }
     }
 
-    private fun findFrameVariable(task: TaskState, frameId: Int, name: String): Pair<CallFrameState, KatariValue>? {
+    private fun findFrameVariable(task: TaskState, frameId: Int, name: String): Pair<CallFrameState, RuntimeValue>? {
         val frame = findFrameById(task, frameId) ?: return null
         val value = frame.localVariables[name]
         if (value != null) {
@@ -736,7 +721,7 @@ class KatariInstance(
     private fun applyExitCallFrameInstruction(
         task: TaskState,
         instruction: ExitCallFrameInstruction,
-        returnValue: KatariValue,
+        returnValue: RuntimeValue,
     ): TaskState {
         require(task.callFrames.size > 1) { "Cannot exit root call frame" }
         val exitingFrame = currentCallFrame(task)
@@ -916,57 +901,38 @@ class KatariInstance(
         )
     }
 
-    private fun KatariValue.asBoolean(): Boolean {
+    private fun RuntimeValue.asBoolean(): Boolean {
         return when (this) {
-            is KatariValue.Bool -> value
+            is BooleanValue -> value
             else -> throw IllegalArgumentException("Expected boolean value but got $this")
         }
     }
 
-    private fun KatariValue.asInt(): Int {
+    private fun RuntimeValue.asInt(): Int {
         return when (this) {
-            is KatariValue.Int32 -> value
+            is IntValue -> value
             else -> throw IllegalArgumentException("Expected int value but got $this")
         }
     }
 
-    private fun KatariValue.asDouble(): Double {
+    private fun RuntimeValue.asDouble(): Double {
         return when (this) {
-            is KatariValue.Int32 -> value.toDouble()
-            is KatariValue.Float64 -> value
+            is IntValue -> value.toDouble()
+            is DoubleValue -> value
             else -> throw IllegalArgumentException("Expected numeric value but got $this")
         }
     }
 
-    private fun KatariValue.numericIdentity(): KatariValue {
+    private fun RuntimeValue.negateNumeric(): RuntimeValue {
         return when (this) {
-            is KatariValue.Int32 -> this
-            is KatariValue.Float64 -> this
+            is IntValue -> IntValue(-value, snapshotCodec.symbolTable())
+            is DoubleValue -> DoubleValue(-value, snapshotCodec.symbolTable())
             else -> throw IllegalArgumentException("Expected numeric value but got $this")
         }
     }
 
-    private fun KatariValue.negateNumeric(): KatariValue {
-        return when (this) {
-            is KatariValue.Int32 -> KatariValue.Int32(-value)
-            is KatariValue.Float64 -> KatariValue.Float64(-value)
-            else -> throw IllegalArgumentException("Expected numeric value but got $this")
-        }
-    }
-
-    private fun KatariValue.asString(): String {
-        return when (this) {
-            KatariValue.Null -> "null"
-            KatariValue.DefaultArgument -> "<default>"
-            is KatariValue.Bool -> value.toString()
-            is KatariValue.Int32 -> value.toString()
-            is KatariValue.Float64 -> value.toString()
-            is KatariValue.Text -> value
-            is KatariValue.Lambda -> "Lambda($id)"
-            is KatariValue.EnumValue -> entryName
-            is KatariValue.EnumEntries -> entries.joinToString(prefix = "[", postfix = "]") { it.entryName }
-            is KatariValue.HostObject -> value.toString()
-        }
+    private fun RuntimeValue.asString(): String {
+        return convertToString()
     }
 
     private fun slotVariableName(slot: Int): String = "$SLOT_VARIABLE_PREFIX$slot"
@@ -987,10 +953,21 @@ private data class FunctionDispatchRequest(
 
 private data class DispatchData(
     val taskId: String,
-    val arguments: List<KatariValue>,
-    val definition: KatariFunctionDefinition,
-    val context: KatariFunctionDispatchContext,
+    val arguments: List<RuntimeValue>,
+    val definition: NarrativeCallable,
+    val context: NarrativeCallDispatchContext,
 )
+
+private data class ResolvedCall(
+    val callable: NarrativeCallable,
+    val arguments: List<RuntimeValue>,
+)
+
+private class KatariCallContextImpl(
+    override val symbolTable: SymbolTable,
+    override val state: Any,
+    override val task: Any,
+) : NarrativeCallContext, NarrativeCallDispatchContext
 
 private class KatariExpressionEvaluationException(
     val position: SourcePosition?,
