@@ -349,7 +349,7 @@ class NarrativeBindingsTest {
         assertEquals(listOf("actor:true", "npc:npc-1"), events)
     }
 
-    //TODO @Test
+    @Test
     fun typedDslSupportsComputedGlobalAndExtensionProperties() = runTest {
         var chapter = 1
         val actor = BindingActor()
@@ -367,20 +367,23 @@ class NarrativeBindingsTest {
                         chapter = (v as IntValue).value
                     })
             )
-
-            // TODO: Добавить поддержку extension property и в целом, как будто здесь не хватает поддержки suspendable
-//            extensionProperty(
-//                name = "ready",
-//                receiver = actorType.asParameterType(),
-//                valueType = KatariTypes.Boolean,
-//                getter = { receiver, _ ->
-//                    KatariValue.Bool(((receiver as KatariValue.HostObject).value as BindingActor).ready)
-//                },
-//                setter = { receiver, value, _ ->
-//                    ((receiver as KatariValue.HostObject).value as BindingActor).ready =
-//                        (value as KatariValue.Bool).value
-//                },
-//            )
+            registerKotliteExtensionProperty(
+                ExtensionProperty(
+                    declaredName = "ready",
+                    receiver = "binding_actor",
+                    type = "Boolean",
+                    getter = { interpreter, receiver, _ ->
+                        BooleanValue(
+                            ((receiver as NarrativeHostValue).value as BindingActor).ready,
+                            interpreter.symbolTable(),
+                        )
+                    },
+                    setter = { _, receiver, value, _ ->
+                        ((receiver as NarrativeHostValue).value as BindingActor).ready =
+                            (value as BooleanValue).value
+                    },
+                )
+            )
         }
         val instance = KatariInstance(
             program = KatariNarrativeProgram(
@@ -391,6 +394,7 @@ class NarrativeBindingsTest {
                     val observedChapter = chapter
                     val observedReady = actor.ready
                 """.trimIndent(),
+                bindings,
             ),
             initialState = KatariState(
                 programVersion = 1,

@@ -7,6 +7,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.EnumEntriesIteratorValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionResponse
+import com.sunnychung.lib.multiplatform.kotlite.model.GlobalProperty
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
 import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallContext
@@ -422,6 +423,15 @@ class KatariInstance(
     ): TaskState {
         val value = evaluateExpression(currentState, task, instruction.expression)
         val frame = currentCallFrame(task)
+        if (!instruction.declaresLocal) {
+            findComputedGlobalProperty(instruction.name)?.let { property ->
+                property.accessor.assign(value = value)
+                return task.copy(
+                    instructionPointer = task.instructionPointer + 1,
+                    slots = if (instruction.expression is SlotExpression) task.slots - instruction.expression.slot else task.slots,
+                )
+            }
+        }
         val updated = frame.copy(localVariables = frame.localVariables + (instruction.name to value))
         return syncTopLocals(
             task.copy(
@@ -441,6 +451,12 @@ class KatariInstance(
         return when (resultTarget) {
             null -> task.copy(instructionPointer = nextInstructionPointer)
             is ResultTarget.Variable -> {
+                if (!resultTarget.declaresLocal) {
+                    findComputedGlobalProperty(resultTarget.name)?.let { property ->
+                        property.accessor.assign(value = value)
+                        return task.copy(instructionPointer = nextInstructionPointer)
+                    }
+                }
                 val frame = currentCallFrame(task)
                 val updated = frame.copy(localVariables = frame.localVariables + (resultTarget.name to value))
                 syncTopLocals(task.copy(instructionPointer = nextInstructionPointer, callFrames = task.callFrames.replaceLast(updated)))
@@ -663,8 +679,18 @@ class KatariInstance(
         if (frameValue != null) {
             return frameValue.second
         }
+        findComputedGlobalProperty(name)?.let {
+            return it.accessor.read()
+        }
         return state.globals[name]
             ?: throw IllegalArgumentException("Variable `$name` is not defined")
+    }
+
+    private fun findComputedGlobalProperty(name: String): GlobalProperty? {
+        if (name in currentState.globals) return null
+        return executionEnvironment
+            .getGlobalProperties(snapshotCodec.symbolTable())
+            .firstOrNull { it.declaredName == name }
     }
 
     private fun resolveVariableReference(

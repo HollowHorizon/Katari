@@ -34,6 +34,7 @@ class GlobalProperty(
         private set
 
     fun attachToSemanticAnalyzer(semanticAnalyzer: SemanticAnalyzer) {
+        interpreter = null
         with (semanticAnalyzer) {
             generateTransformedName()
             dataType = currentScope.assertToDataType(typeNode!!)

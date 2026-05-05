@@ -256,12 +256,13 @@ class NarrativeBindingsBuilder {
     fun <T : Any, S : ValueSnapshot> registerHostType(
         typeClass: KClass<T>,
         typeId: String = typeClass.qualifiedName ?: typeClass.simpleName!!,
+        superTypeIds: List<String> = emptyList(),
         snapshotClass: KClass<S>,
         snapshotSerializer: KSerializer<S>,
         serialize: (T) -> S,
         deserialize: suspend (S, ValueRestoreContext) -> T,
     ): NarrativeBindingsBuilder = apply {
-        registerHostType(typeClass, typeId)
+        registerHostType(typeClass, typeId, superTypeIds)
         valueCodecs += object : ValueCodec<S> {
             override val typeId: String = typeId
             override val snapshotClass: KClass<S> = snapshotClass
@@ -292,17 +293,17 @@ class NarrativeBindingsBuilder {
         )
         val eeGlobalProperties = executionEnvironment.getGlobalProperties(interpreter.symbolTable())
         val eeGlobalPropertyNames = eeGlobalProperties.map { it.declaredName }.toSet()
-        eeGlobalProperties.forEach { property ->
-            if (property.declaredName !in globals) {
-                val value = property.getter?.invoke(interpreter) ?: return@forEach
-                globals[property.declaredName] = value
-            }
-        }
         val baseGlobals = globals.toMap()
+        val computedGlobalValues = eeGlobalProperties.mapNotNull { property ->
+            property.getter?.invoke(interpreter)?.let { property.declaredName to it }
+        }.toMap()
         val importGlobals = importAliases.mapNotNull { (alias, target) ->
-            baseGlobals[target]?.let { alias to it } ?: baseGlobals[target.substringAfterLast('.')]?.let { alias to it }
+            baseGlobals[target]?.let { alias to it }
+                ?: baseGlobals[target.substringAfterLast('.')]?.let { alias to it }
+                ?: computedGlobalValues[target]?.let { alias to it }
+                ?: computedGlobalValues[target.substringAfterLast('.')]?.let { alias to it }
         }.toMap() + importWildcards.flatMap { prefix ->
-            baseGlobals.mapNotNull { (name, value) ->
+            (baseGlobals + computedGlobalValues).mapNotNull { (name, value) ->
                 name.removePrefix("$prefix.").takeIf { it != name && it.isNotBlank() }?.let { it to value }
             }
         }
