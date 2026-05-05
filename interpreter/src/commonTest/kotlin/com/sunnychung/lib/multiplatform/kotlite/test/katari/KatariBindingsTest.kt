@@ -1095,6 +1095,63 @@ class NarrativeBindingsTest {
         assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
         assertEquals(listOf("Calm", "Angry", "Angry"), events)
     }
+
+    @Test
+    fun registeredEnumEntryCanBeUsedAsCustomFunctionDefaultArgument() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            registerEnum(BindingMood::class, "BindingMood", BindingMood.entries)
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(
+                    CustomFunctionParameter("value", "BindingMood", defaultValueExpression = "BindingMood.Calm")
+                ),
+            ) { args, _ ->
+                events += (args.single() as NarrativeEnumValue).entryName
+                UnitValue
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = "capture()",
+                bindings = bindings,
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("Calm"), events)
+    }
+
+    @Test
+    fun unusedCustomFunctionDefaultArgumentIsNotResolvedDuringProgramCompilation() {
+        val bindings = NarrativeBindings {
+            immediateFunction(
+                name = "unused",
+                valueParameters = listOf(
+                    CustomFunctionParameter("value", "String", defaultValueExpression = "Unavailable.full()")
+                ),
+            )
+        }
+
+        KatariNarrativeProgram(
+            filename = "<Narrative>",
+            code = """narrate("ok")""",
+            bindings = bindings,
+        )
+    }
 }
 
 @Serializable

@@ -21,6 +21,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterModi
 import com.sunnychung.lib.multiplatform.kotlite.model.GlobalProperty
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
 import com.sunnychung.lib.multiplatform.kotlite.model.LibraryModule
+import com.sunnychung.lib.multiplatform.kotlite.model.ListValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallContext
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallDispatchContext
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallResult
@@ -51,7 +52,7 @@ data class KatariBindings(
 )
 
 class NarrativeBindingsBuilder {
-    private val executionEnvironment = ExecutionEnvironment()
+    val executionEnvironment = ExecutionEnvironment()
     private var importExecutionEnvironmentFunctions = true
     private val narrativeCallables = mutableListOf<NarrativeCallable>()
     private val valueCodecs = mutableListOf<ValueCodec<out ValueSnapshot>>()
@@ -60,6 +61,15 @@ class NarrativeBindingsBuilder {
     private val importAliases = linkedMapOf<String, String>()
     private val importWildcards = mutableListOf<String>()
     private val hostTypeIdByClass = linkedMapOf<KClass<*>, String>()
+
+    private val interpreter by lazy {
+        KotliteInterpreter(
+            filename = "<KatariBindings>",
+            code = "",
+            executionEnvironment = executionEnvironment,
+        )
+    }
+    val symbolTable get() = interpreter.symbolTable()
 
     fun register(callable: NarrativeCallable): NarrativeBindingsBuilder = apply {
         narrativeCallables += callable
@@ -116,17 +126,19 @@ class NarrativeBindingsBuilder {
             context: NarrativeCallContext,
         ) -> RuntimeValue = { _, _ -> NullValue },
     ): NarrativeBindingsBuilder = apply {
-        val resolvedParameterDefaults = resolveParameterDefaults(valueParameters, parameterDefaults)
+        val unresolvedParameterDefaults = unresolvedParameterDefaults(valueParameters, parameterDefaults)
         register(object : NarrativeCallable {
             override val id: String = name
             override val receiverType: String? = receiverType
             override val returnType: String = returnType
             override val typeParameters: List<TypeParameter> = typeParameters
             override val valueParameters: List<CustomFunctionParameter> = valueParameters
-            override val parameterDefaults: List<RuntimeValue?> = resolvedParameterDefaults
+            override val parameterDefaults: List<RuntimeValue?> = unresolvedParameterDefaults
 
             override suspend fun startCall(arguments: List<RuntimeValue>, context: NarrativeCallContext): NarrativeCallResult {
-                return NarrativeCallResult.Returned(execute(arguments, context))
+                return NarrativeCallResult.Returned(
+                    execute(resolveDefaultArguments(arguments, valueParameters, receiverType != null, context), context)
+                )
             }
 
             override suspend fun resumeCall(
@@ -183,17 +195,17 @@ class NarrativeBindingsBuilder {
             context: NarrativeCallContext,
         ) -> RuntimeValue = { _, _, _ -> NullValue },
     ): NarrativeBindingsBuilder = apply {
-        val resolvedParameterDefaults = resolveParameterDefaults(valueParameters, parameterDefaults)
+        val unresolvedParameterDefaults = unresolvedParameterDefaults(valueParameters, parameterDefaults)
         register(object : NarrativeCallable {
             override val id: String = name
             override val receiverType: String? = receiverType
             override val returnType: String = returnType
             override val typeParameters: List<TypeParameter> = typeParameters
             override val valueParameters: List<CustomFunctionParameter> = valueParameters
-            override val parameterDefaults: List<RuntimeValue?> = resolvedParameterDefaults
+            override val parameterDefaults: List<RuntimeValue?> = unresolvedParameterDefaults
 
             override suspend fun startCall(arguments: List<RuntimeValue>, context: NarrativeCallContext): NarrativeCallResult {
-                onStart(arguments, context)
+                onStart(resolveDefaultArguments(arguments, valueParameters, receiverType != null, context), context)
                 return NarrativeCallResult.Suspended
             }
 
@@ -202,7 +214,9 @@ class NarrativeBindingsBuilder {
                 response: FunctionResponse?,
                 context: NarrativeCallContext,
             ): NarrativeCallResult {
-                return NarrativeCallResult.Returned(onResume(arguments, response, context))
+                return NarrativeCallResult.Returned(
+                    onResume(resolveDefaultArguments(arguments, valueParameters, receiverType != null, context), response, context)
+                )
             }
 
             override fun dispatch(
@@ -210,7 +224,7 @@ class NarrativeBindingsBuilder {
                 context: NarrativeCallDispatchContext,
                 resume: (FunctionResponse?) -> Unit,
             ) {
-                onDispatch(arguments, context, resume)
+                onDispatch(resolveDefaultArguments(arguments, valueParameters, receiverType != null, context), context, resume)
             }
         })
     }
@@ -239,7 +253,7 @@ class NarrativeBindingsBuilder {
     ): NarrativeBindingsBuilder = apply {
         hostTypeIdByClass[typeClass] = typeId
         val st = StateSnapshotCodec(executionEnvironment = executionEnvironment).symbolTable()
-        enumDefinitions[typeId] = KatariEnumDefinition(
+        val definition = KatariEnumDefinition(
             typeId = typeId,
             entries = values.map { value ->
                 NarrativeEnumValue(
@@ -250,7 +264,8 @@ class NarrativeBindingsBuilder {
                 )
             },
         )
-        registerNarrativeEnumSemanticSymbols(typeId, values.map { it.name })
+        enumDefinitions[typeId] = definition
+        registerNarrativeEnumSemanticSymbols(typeId, definition.entries)
     }
 
     fun <T : Any, S : ValueSnapshot> registerHostType(
@@ -394,23 +409,27 @@ class NarrativeBindingsBuilder {
         )
     }
 
-    private fun registerNarrativeEnumSemanticSymbols(typeId: String, entryNames: List<String>) {
+    private fun registerNarrativeEnumSemanticSymbols(typeId: String, entries: List<NarrativeEnumValue>) {
+        val entriesByName = entries.associateBy { it.entryName }
         registerNarrativeTypeIfNeeded(typeId, modifiers = setOf(ClassModifier.enum))
         executionEnvironment.registerExtensionProperty(
             ExtensionProperty(
                 receiver = "$typeId.Companion",
                 declaredName = "entries",
                 type = "List<$typeId>",
-                getter = { _, _, _ -> throw UnsupportedOperationException("Katari enum entries are compiled directly") },
+                getter = { interpreter, _, _ ->
+                    val entryType = entries.firstOrNull()?.type() ?: interpreter.symbolTable().AnyType
+                    ListValue(entries, entryType, interpreter.symbolTable())
+                },
             )
         )
-        entryNames.forEach { entryName ->
+        entries.forEach { entry ->
             executionEnvironment.registerExtensionProperty(
                 ExtensionProperty(
                     receiver = "$typeId.Companion",
-                    declaredName = entryName,
+                    declaredName = entry.entryName,
                     type = typeId,
-                    getter = { _, _, _ -> throw UnsupportedOperationException("Katari enum entries are compiled directly") },
+                    getter = { _, _, _ -> entriesByName.getValue(entry.entryName) },
                 )
             )
         }
@@ -451,19 +470,35 @@ class NarrativeBindingsBuilder {
         )
     }
 
-    private fun resolveParameterDefaults(
+    private fun unresolvedParameterDefaults(
         valueParameters: List<CustomFunctionParameter>,
         parameterDefaults: List<RuntimeValue?>,
     ): List<RuntimeValue?> {
         if (parameterDefaults.isNotEmpty()) return parameterDefaults
         return valueParameters.map { parameter ->
-            parameter.defaultValueExpression?.let { expression ->
-                evalKotliteExpression(
-                    filename = "<NarrativeDefault:${parameter.name}>",
-                    code = expression,
-                    executionEnvironment = executionEnvironment,
-                )
-            }
+            if (parameter.defaultValueExpression != null) DefaultArgumentMarker else null
+        }
+    }
+
+    private fun resolveDefaultArguments(
+        arguments: List<RuntimeValue>,
+        valueParameters: List<CustomFunctionParameter>,
+        hasReceiver: Boolean,
+        context: NarrativeCallContext,
+    ): List<RuntimeValue> {
+        if (arguments.none { it === DefaultArgumentMarker }) return arguments
+        val receiverOffset = if (hasReceiver) 1 else 0
+        return arguments.mapIndexed { index, argument ->
+            if (argument !== DefaultArgumentMarker) return@mapIndexed argument
+            val parameter = valueParameters.getOrNull(index - receiverOffset)
+                ?: error("Missing default parameter metadata for argument #$index")
+            val expression = parameter.defaultValueExpression
+                ?: error("Missing default value expression for `${parameter.name}`")
+            evalKotliteExpression(
+                filename = "<NarrativeDefault:${parameter.name}>",
+                code = expression,
+                executionEnvironment = executionEnvironment,
+            )
         }
     }
 

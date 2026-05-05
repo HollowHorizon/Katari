@@ -1616,14 +1616,18 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
     }
 
     fun FunctionValueParameterNode.visit(modifier: Modifier = Modifier(), functionDeclarationNode: FunctionDeclarationNode?, isDeclareProperty: Boolean = true, overrideTransformedName: String? = null) {
+        val shouldAnalyzeDefaultValue = functionDeclarationNode !is CustomFunctionDeclarationNode ||
+                functionDeclarationNode.position != SourcePosition.NONE
         if (defaultValue is LambdaLiteralNode && type is FunctionTypeNode) {
             defaultValue.parameterTypesUpperBound = (type as FunctionTypeNode).parameterTypes
         }
-        defaultValue?.visit(modifier = modifier)
+        if (shouldAnalyzeDefaultValue) {
+            defaultValue?.visit(modifier = modifier)
+        }
         if (currentScope.hasProperty(name = name, isThisScopeOnly = true)) {
             throw SemanticException(position, "Property `$name` has already been declared")
         }
-        if (defaultValue != null) {
+        if (defaultValue != null && shouldAnalyzeDefaultValue) {
             val valueType = defaultValue.type().toDataType()
             val subjectType = type.toDataType()
             if (!subjectType.isAssignableFrom(valueType)) {
@@ -2811,8 +2815,8 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
     fun VariableReferenceNode.type(modifier: ResolveTypeModifier = ResolveTypeModifier()) = type ?: (
             currentScope.findClass(variableName)
                 ?.let { ClassTypeNode(TypeNode(position, variableName, null, false)) }
-                ?: currentScope.findFunctionsByOriginalName(variableName).firstOrNull()?.let { FunctionTypeNode(position = it.first.position, parameterTypes = null, returnType = null, isNullable = false) }
-                ?: currentScope.getPropertyType(variableName).first.type.toTypeNode()!!
+                ?: currentScope.getPropertyTypeOrNull(variableName)?.first?.type?.toTypeNode()
+                ?: currentScope.findFunctionsByOriginalName(variableName).first().let { FunctionTypeNode(position = it.first.position, parameterTypes = null, returnType = null, isNullable = false) }
             ).also { type = it }
 
     fun IndexOpNode.type(modifier: ResolveTypeModifier = ResolveTypeModifier()): TypeNode {
