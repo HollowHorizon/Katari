@@ -33,6 +33,7 @@ import kotlinx.serialization.modules.polymorphic
 class StateSnapshotCodec(
     private val valueCodecs: KatariValueCodecRegistry = KatariValueCodecRegistry(emptyList()),
     private val executionEnvironment: ExecutionEnvironment = ExecutionEnvironment(),
+    private val persistentGlobalNames: Set<String> = emptySet(),
 ) {
     private val runtimeInterpreter by lazy {
         KotliteInterpreter(
@@ -72,10 +73,14 @@ class StateSnapshotCodec(
                 parentTaskId = task.parentTaskId,
             )
         }
+        val globalRefs = state.globals
+            .filterKeys { it in persistentGlobalNames }
+            .mapValues { (_, value) -> valueTable.reference(value) }
         return KatariStateSnapshot(
             programVersion = state.programVersion,
             tasks = tasks,
             values = valueTable.serializeValues { value -> serializeValue(value, valueTable) },
+            globalRefs = globalRefs,
         )
     }
 
@@ -96,6 +101,7 @@ class StateSnapshotCodec(
         snapshot.values.keys.sorted().forEach { restoreSharedValue(it) }
         return KatariState(
             programVersion = snapshot.programVersion,
+            globals = snapshot.globalRefs.mapValues { (_, ref) -> sharedValues.getValue(ref.valueId) },
             tasks = snapshot.tasks.map { task ->
                 fun restoreVariables(refs: Map<String, ValueReferenceSnapshot>): Map<String, RuntimeValue> {
                     return refs.mapValues { (_, ref) ->

@@ -45,6 +45,7 @@ import kotlin.reflect.KClass
 
 data class KatariBindings(
     val globals: Map<String, RuntimeValue>,
+    val persistentGlobalNames: Set<String> = emptySet(),
     val executionEnvironment: ExecutionEnvironment,
     val snapshotCodec: StateSnapshotCodec,
     val enumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
@@ -57,6 +58,7 @@ class NarrativeBindingsBuilder {
     private val narrativeCallables = mutableListOf<NarrativeCallable>()
     private val valueCodecs = mutableListOf<ValueCodec<out ValueSnapshot>>()
     private val globals = linkedMapOf<String, RuntimeValue>()
+    private val persistentGlobalNames = linkedSetOf<String>()
     private val enumDefinitions = linkedMapOf<String, KatariEnumDefinition>()
     private val importAliases = linkedMapOf<String, String>()
     private val importWildcards = mutableListOf<String>()
@@ -294,8 +296,17 @@ class NarrativeBindingsBuilder {
         }
     }
 
-    fun global(name: String, value: Any?): NarrativeBindingsBuilder = apply {
+    fun global(name: String, value: Any?, persistent: Boolean = false): NarrativeBindingsBuilder = apply {
         globals[name] = toRuntimeValue(value)
+        if (persistent) {
+            persistentGlobalNames += name
+        } else {
+            persistentGlobalNames -= name
+        }
+    }
+
+    fun persistentGlobal(name: String, value: Any?): NarrativeBindingsBuilder = apply {
+        global(name, value, persistent = true)
     }
 
     fun build(): KatariBindings {
@@ -399,10 +410,12 @@ class NarrativeBindingsBuilder {
 
         return KatariBindings(
             globals = normalizedGlobals,
+            persistentGlobalNames = persistentGlobalNames.toSet(),
             executionEnvironment = executionEnvironment,
             snapshotCodec = StateSnapshotCodec(
                 valueCodecs = codecRegistry,
                 executionEnvironment = executionEnvironment,
+                persistentGlobalNames = persistentGlobalNames,
             ),
             enumDefinitions = enumDefinitions,
             importAliases = importAliases,

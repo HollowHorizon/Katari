@@ -1,6 +1,5 @@
 package com.sunnychung.lib.multiplatform.kotlite.katari
 
-import com.sunnychung.lib.multiplatform.kotlite.KotliteInterpreter
 import com.sunnychung.lib.multiplatform.kotlite.SemanticAnalyzer
 import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
 import com.sunnychung.lib.multiplatform.kotlite.model.ASTNode
@@ -27,29 +26,47 @@ import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
 import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
 
+data class KatariNarrativeAnalysis(
+    val sourceScript: ScriptNode,
+    val importedScript: ScriptNode,
+    val semanticScript: ScriptNode,
+    val semanticAnalyzer: SemanticAnalyzer,
+    val program: KatariProgram,
+)
+
 fun KatariNarrativeProgram(
     filename: String,
     code: String,
     bindings: KatariBindings = NarrativeBindings { registerBuiltinFunctions(NarrativeNoOpHost) },
     sourceProvider: KatariSourceProvider = EmptyKatariSourceProvider,
-): KatariProgram {
+): KatariProgram = analyzeKatariNarrativeProgram(filename, code, bindings, sourceProvider).program
+
+fun analyzeKatariNarrativeProgram(
+    filename: String,
+    code: String,
+    bindings: KatariBindings = NarrativeBindings { registerBuiltinFunctions(NarrativeNoOpHost) },
+    sourceProvider: KatariSourceProvider = EmptyKatariSourceProvider,
+): KatariNarrativeAnalysis {
     val ast = KatariParser(Lexer(filename = filename, code = code, isParseSingleQuotedString = true)).narrativeScript()
     val imports = resolveKatariImports(filename, ast, sourceProvider)
     val semanticScript = imports.script.lowerNarrativeStringStatements(imports.scriptNamespaces)
     bindings.executionEnvironment.installKatariTaskSemanticTypes()
-    SemanticAnalyzer(semanticScript, bindings.executionEnvironment).analyze()
-    val interpreter = KotliteInterpreter(
-        filename = "<NarrativeInline>",
-        code = "",
-        executionEnvironment = bindings.executionEnvironment,
-    )
-    val declarations = bindings.executionEnvironment.getBuiltinFunctions(interpreter.symbolTable())
-    return KatariCompiler(
+    val semanticAnalyzer = SemanticAnalyzer(semanticScript, bindings.executionEnvironment)
+    semanticAnalyzer.analyze()
+    val declarations = bindings.executionEnvironment.getBuiltinFunctions(semanticAnalyzer.symbolTable)
+    val program = KatariCompiler(
         inlineEnvironmentFunctions = declarations,
         importedEnumDefinitions = bindings.enumDefinitions,
         nameAliases = bindings.importAliases + imports.nameAliases,
         scriptNamespaces = imports.scriptNamespaces,
     ).compile(imports.script)
+    return KatariNarrativeAnalysis(
+        sourceScript = ast,
+        importedScript = imports.script,
+        semanticScript = semanticScript,
+        semanticAnalyzer = semanticAnalyzer,
+        program = program,
+    )
 }
 
 private fun com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment.installKatariTaskSemanticTypes() {

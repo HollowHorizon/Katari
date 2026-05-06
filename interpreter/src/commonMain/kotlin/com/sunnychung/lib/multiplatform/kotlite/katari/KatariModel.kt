@@ -297,6 +297,7 @@ data class KatariStateSnapshot(
     val programVersion: Int,
     val tasks: List<TaskSnapshot>,
     val values: Map<Int, @Polymorphic ValueSnapshot> = emptyMap(),
+    val globalRefs: Map<String, ValueReferenceSnapshot> = emptyMap(),
 )
 
 @Serializable
