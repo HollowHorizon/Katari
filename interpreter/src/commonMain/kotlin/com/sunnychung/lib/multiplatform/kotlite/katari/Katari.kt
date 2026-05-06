@@ -31,7 +31,10 @@ data class KatariNarrativeAnalysis(
     val importedScript: ScriptNode,
     val semanticScript: ScriptNode,
     val semanticAnalyzer: SemanticAnalyzer,
-    val program: KatariProgram,
+    val nameAliases: Map<String, String> = emptyMap(),
+    val scriptNamespaces: Map<String, Set<String>> = emptyMap(),
+    val enumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
+    val program: KatariProgram? = null,
 )
 
 fun KatariNarrativeProgram(
@@ -40,8 +43,26 @@ fun KatariNarrativeProgram(
     bindings: KatariBindings = NarrativeBindings { registerBuiltinFunctions(NarrativeNoOpHost) },
     sourceProvider: KatariSourceProvider = EmptyKatariSourceProvider,
 ): KatariProgram = analyzeKatariNarrativeProgram(filename, code, bindings, sourceProvider).program
+    ?: error("Katari narrative compilation did not produce a program")
 
 fun analyzeKatariNarrativeProgram(
+    filename: String,
+    code: String,
+    bindings: KatariBindings = NarrativeBindings { registerBuiltinFunctions(NarrativeNoOpHost) },
+    sourceProvider: KatariSourceProvider = EmptyKatariSourceProvider,
+): KatariNarrativeAnalysis {
+    val analysis = analyzeKatariNarrativeScript(filename, code, bindings, sourceProvider)
+    val declarations = bindings.executionEnvironment.getBuiltinFunctions(analysis.semanticAnalyzer.symbolTable)
+    val program = KatariCompiler(
+        inlineEnvironmentFunctions = declarations,
+        importedEnumDefinitions = bindings.enumDefinitions,
+        nameAliases = bindings.importAliases + analysis.nameAliases,
+        scriptNamespaces = analysis.scriptNamespaces,
+    ).compile(analysis.importedScript)
+    return analysis.copy(program = program)
+}
+
+fun analyzeKatariNarrativeScript(
     filename: String,
     code: String,
     bindings: KatariBindings = NarrativeBindings { registerBuiltinFunctions(NarrativeNoOpHost) },
@@ -53,19 +74,14 @@ fun analyzeKatariNarrativeProgram(
     bindings.executionEnvironment.installKatariTaskSemanticTypes()
     val semanticAnalyzer = SemanticAnalyzer(semanticScript, bindings.executionEnvironment)
     semanticAnalyzer.analyze()
-    val declarations = bindings.executionEnvironment.getBuiltinFunctions(semanticAnalyzer.symbolTable)
-    val program = KatariCompiler(
-        inlineEnvironmentFunctions = declarations,
-        importedEnumDefinitions = bindings.enumDefinitions,
-        nameAliases = bindings.importAliases + imports.nameAliases,
-        scriptNamespaces = imports.scriptNamespaces,
-    ).compile(imports.script)
     return KatariNarrativeAnalysis(
         sourceScript = ast,
         importedScript = imports.script,
         semanticScript = semanticScript,
         semanticAnalyzer = semanticAnalyzer,
-        program = program,
+        nameAliases = imports.nameAliases,
+        scriptNamespaces = imports.scriptNamespaces,
+        enumDefinitions = bindings.enumDefinitions,
     )
 }
 

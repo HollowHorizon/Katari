@@ -241,7 +241,7 @@ class NarrativeBindingsBuilder {
 
     fun <T : Any> registerHostType(
         typeClass: KClass<T>,
-        typeId: String = typeClass.qualifiedName ?: typeClass.simpleName!!,
+        typeId: String,
         superTypeIds: List<String> = emptyList(),
     ): NarrativeBindingsBuilder = apply {
         hostTypeIdByClass[typeClass] = typeId
@@ -250,7 +250,7 @@ class NarrativeBindingsBuilder {
 
     fun <T : Enum<T>> registerEnum(
         typeClass: KClass<T>,
-        typeId: String = typeClass.qualifiedName ?: typeClass.simpleName!!,
+        typeId: String,
         values: List<T>,
     ): NarrativeBindingsBuilder = apply {
         hostTypeIdByClass[typeClass] = typeId
@@ -272,7 +272,7 @@ class NarrativeBindingsBuilder {
 
     fun <T : Any, S : ValueSnapshot> registerHostType(
         typeClass: KClass<T>,
-        typeId: String = typeClass.qualifiedName ?: typeClass.simpleName!!,
+        typeId: String,
         superTypeIds: List<String> = emptyList(),
         snapshotClass: KClass<S>,
         snapshotSerializer: KSerializer<S>,
@@ -536,19 +536,16 @@ class NarrativeBindingsBuilder {
             is String -> StringValue(value, st)
             is Enum<*> -> {
                 val typeId = hostTypeIdByClass[value::class]
-                    ?: value::class.qualifiedName
-                    ?: value::class.simpleName!!
                 val definition = enumDefinitions[typeId]
                     ?: throw IllegalArgumentException(
-                        "No Katari enum type is registered for `${value::class.qualifiedName}`. " +
+                        "No Katari enum type is registered for `${value::class}`. " +
                                 "Register it with `registerEnum(...)` first."
                     )
                 definition.entry(value.name)
             }
             else -> {
                 val typeId = hostTypeIdByClass[value::class]
-                    ?: value::class.qualifiedName
-                    ?: value::class.simpleName!!
+                    ?: error("Type $value is not registered for `${value::class}`")
                 NarrativeHostValue(typeId = typeId, value = value, symbolTable = st)
             }
         }
