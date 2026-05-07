@@ -34,6 +34,7 @@ class StateSnapshotCodec(
     private val valueCodecs: KatariValueCodecRegistry = KatariValueCodecRegistry(emptyList()),
     private val executionEnvironment: ExecutionEnvironment = ExecutionEnvironment(),
     private val persistentGlobalNames: Set<String> = emptySet(),
+    private val sharedSymbolTable: SymbolTable? = null,
 ) {
     private val runtimeInterpreter by lazy {
         KotliteInterpreter(
@@ -43,7 +44,7 @@ class StateSnapshotCodec(
         )
     }
 
-    fun symbolTable(): SymbolTable = runtimeInterpreter.symbolTable()
+    fun symbolTable(): SymbolTable = sharedSymbolTable ?: runtimeInterpreter.symbolTable()
 
     fun serialize(state: KatariState): KatariStateSnapshot {
         val valueTable = NarrativeSnapshotValueTable()
@@ -196,7 +197,7 @@ class StateSnapshotCodec(
                         disabledText = option.disabledText,
                     )
                 } else if (value.value is RuntimeValue) {
-                    serializeRuntimeValue(value.value)
+                    serializeRuntimeValue(value.value, valueTable)
                 } else if (value.typeId == KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID) {
                     val iterator = value.value as? EnumEntriesIteratorValue
                         ?: throw IllegalArgumentException("Enum entries iterator value is corrupted")
@@ -210,7 +211,7 @@ class StateSnapshotCodec(
                         .serialize(value.value)
                 }
             }
-            else -> serializeRuntimeValue(value)
+            else -> serializeRuntimeValue(value, valueTable)
         }
     }
 
@@ -269,11 +270,11 @@ class StateSnapshotCodec(
                 ),
                 symbolTable = symbolTable(),
             )
-            is RuntimeListValueSnapshot -> restoreRuntimeValue(snapshot)
-            is RuntimeMapValueSnapshot -> restoreRuntimeValue(snapshot)
-            is RuntimePairValueSnapshot -> restoreRuntimeValue(snapshot)
-            is RuntimeIteratorValueSnapshot -> restoreRuntimeValue(snapshot)
-            is RuntimeMapEntryValueSnapshot -> restoreRuntimeValue(snapshot)
+            is RuntimeListValueSnapshot -> restoreRuntimeValue(snapshot, context, restoreReference)
+            is RuntimeMapValueSnapshot -> restoreRuntimeValue(snapshot, context, restoreReference)
+            is RuntimePairValueSnapshot -> restoreRuntimeValue(snapshot, context, restoreReference)
+            is RuntimeIteratorValueSnapshot -> restoreRuntimeValue(snapshot, context, restoreReference)
+            is RuntimeMapEntryValueSnapshot -> restoreRuntimeValue(snapshot, context, restoreReference)
             else -> {
                 val codec = valueCodecs.codec(snapshot)
                 NarrativeHostValue(
@@ -371,7 +372,10 @@ class StateSnapshotCodec(
         }
     }
 
-    private fun serializeRuntimeValue(value: RuntimeValue): ValueSnapshot {
+    private fun serializeRuntimeValue(
+        value: RuntimeValue,
+        valueTable: NarrativeSnapshotValueTable,
+    ): ValueSnapshot {
         return when (value) {
             NullValue -> NullValueSnapshot
             is BooleanValue -> BoolValueSnapshot(value.value)
@@ -385,7 +389,7 @@ class StateSnapshotCodec(
                     RuntimeListValueSnapshot(
                         typeId = value.type().name,
                         elementType = (delegated.typeArguments.singleOrNull() ?: symbolTable().AnyType).descriptiveName,
-                        elements = (holder.value as Iterable<*>).map { serializeRuntimeValue(it as RuntimeValue) },
+                        elements = (holder.value as Iterable<*>).map { serializeValue(it as RuntimeValue, valueTable) },
                     )
                 }
                 "Map", "MutableMap" -> {
@@ -397,8 +401,8 @@ class StateSnapshotCodec(
                         valueType = (delegated.typeArguments.getOrNull(1) ?: symbolTable().AnyType).descriptiveName,
                         entries = (holder.value as Map<*, *>).entries.map { (key, entryValue) ->
                             RuntimeMapEntrySnapshot(
-                                key = serializeRuntimeValue(key as RuntimeValue),
-                                value = serializeRuntimeValue(entryValue as RuntimeValue),
+                                key = serializeValue(key as RuntimeValue, valueTable),
+                                value = serializeValue(entryValue as RuntimeValue, valueTable),
                             )
                         },
                     )
@@ -410,8 +414,8 @@ class StateSnapshotCodec(
                     RuntimePairValueSnapshot(
                         firstType = (delegated.typeArguments.getOrNull(0) ?: symbolTable().AnyType).descriptiveName,
                         secondType = (delegated.typeArguments.getOrNull(1) ?: symbolTable().AnyType).descriptiveName,
-                        first = serializeRuntimeValue(pair.first as RuntimeValue),
-                        second = serializeRuntimeValue(pair.second as RuntimeValue),
+                        first = serializeValue(pair.first as RuntimeValue, valueTable),
+                        second = serializeValue(pair.second as RuntimeValue, valueTable),
                     )
                 }
                 "MapEntry" -> {
@@ -421,8 +425,8 @@ class StateSnapshotCodec(
                     RuntimeMapEntryValueSnapshot(
                         keyType = (delegated.typeArguments.getOrNull(0) ?: symbolTable().AnyType).descriptiveName,
                         valueType = (delegated.typeArguments.getOrNull(1) ?: symbolTable().AnyType).descriptiveName,
-                        key = serializeRuntimeValue(entry.key as RuntimeValue),
-                        value = serializeRuntimeValue(entry.value as RuntimeValue),
+                        key = serializeValue(entry.key as RuntimeValue, valueTable),
+                        value = serializeValue(entry.value as RuntimeValue, valueTable),
                     )
                 }
                 "Iterator" -> {
@@ -432,7 +436,7 @@ class StateSnapshotCodec(
                         ?: throw IllegalArgumentException("Runtime iterator `${value.type().descriptiveName}` is not snapshot-safe")
                     RuntimeIteratorValueSnapshot(
                         elementType = (delegated.typeArguments.singleOrNull() ?: symbolTable().AnyType).descriptiveName,
-                        elements = iterator.remainingElements().map { serializeRuntimeValue(it) },
+                        elements = iterator.remainingElements().map { serializeValue(it, valueTable) },
                     )
                 }
                 else -> throw IllegalArgumentException("No snapshot codec is registered for runtime value type `${value.type().descriptiveName}`")
@@ -440,7 +444,11 @@ class StateSnapshotCodec(
         }
     }
 
-    private fun restoreRuntimeValue(snapshot: ValueSnapshot): RuntimeValue {
+    private suspend fun restoreRuntimeValue(
+        snapshot: ValueSnapshot,
+        context: ValueRestoreContext,
+        restoreReference: suspend (ValueReferenceSnapshot) -> RuntimeValue,
+    ): RuntimeValue {
         val symbolTable = symbolTable()
         return when (snapshot) {
             NullValueSnapshot -> NullValue
@@ -450,7 +458,7 @@ class StateSnapshotCodec(
             is TextValueSnapshot -> StringValue(snapshot.value, symbolTable)
             is RuntimeListValueSnapshot -> {
                 val elementType = runtimeDataType(snapshot.elementType)
-                val elements = snapshot.elements.map { restoreRuntimeValue(it) }
+                val elements = snapshot.elements.map { restoreValue(it, context, restoreReference) }
                 when (snapshot.typeId) {
                     "List" -> ListValue(elements, elementType, symbolTable)
                     "MutableList" -> DelegatedValue(
@@ -472,7 +480,7 @@ class StateSnapshotCodec(
                 val keyType = runtimeDataType(snapshot.keyType)
                 val valueType = runtimeDataType(snapshot.valueType)
                 val entries = snapshot.entries.associate { entry ->
-                    restoreRuntimeValue(entry.key) to restoreRuntimeValue(entry.value)
+                    restoreValue(entry.key, context, restoreReference) to restoreValue(entry.value, context, restoreReference)
                 }
                 when (snapshot.typeId) {
                     "Map" -> DelegatedValue(
@@ -491,22 +499,23 @@ class StateSnapshotCodec(
                 }
             }
             is RuntimePairValueSnapshot -> PairValue(
-                value = restoreRuntimeValue(snapshot.first) to restoreRuntimeValue(snapshot.second),
+                value = restoreValue(snapshot.first, context, restoreReference) to
+                        restoreValue(snapshot.second, context, restoreReference),
                 typeA = runtimeDataType(snapshot.firstType),
                 typeB = runtimeDataType(snapshot.secondType),
                 symbolTable = symbolTable,
             )
             is RuntimeIteratorValueSnapshot -> IteratorValue(
                 value = RuntimeValueSnapshotIterator(
-                    snapshot.elements.map { restoreRuntimeValue(it) }
+                    snapshot.elements.map { restoreValue(it, context, restoreReference) }
                 ),
                 typeArgument = runtimeDataType(snapshot.elementType),
                 symbolTable = symbolTable,
             )
             is RuntimeMapEntryValueSnapshot -> DelegatedValue(
                 value = RuntimeMapEntry(
-                    key = restoreRuntimeValue(snapshot.key),
-                    value = restoreRuntimeValue(snapshot.value),
+                    key = restoreValue(snapshot.key, context, restoreReference),
+                    value = restoreValue(snapshot.value, context, restoreReference),
                 ),
                 fullClassName = "MapEntry",
                 typeArguments = listOf(

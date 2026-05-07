@@ -58,6 +58,7 @@ fun analyzeKatariNarrativeProgram(
         importedEnumDefinitions = bindings.enumDefinitions,
         nameAliases = bindings.importAliases + analysis.nameAliases,
         scriptNamespaces = analysis.scriptNamespaces,
+        runtimeSymbolTable = analysis.semanticAnalyzer.symbolTable,
     ).compile(analysis.importedScript)
     return analysis.copy(program = program)
 }

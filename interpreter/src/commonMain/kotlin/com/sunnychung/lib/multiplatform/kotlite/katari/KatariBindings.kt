@@ -57,7 +57,7 @@ class NarrativeBindingsBuilder {
     private var importExecutionEnvironmentFunctions = true
     private val narrativeCallables = mutableListOf<NarrativeCallable>()
     private val valueCodecs = mutableListOf<ValueCodec<out ValueSnapshot>>()
-    private val globals = linkedMapOf<String, RuntimeValue>()
+    private val globals = linkedMapOf<String, Any?>()
     private val persistentGlobalNames = linkedSetOf<String>()
     private val enumDefinitions = linkedMapOf<String, KatariEnumDefinition>()
     private val importAliases = linkedMapOf<String, String>()
@@ -254,7 +254,7 @@ class NarrativeBindingsBuilder {
         values: List<T>,
     ): NarrativeBindingsBuilder = apply {
         hostTypeIdByClass[typeClass] = typeId
-        val st = StateSnapshotCodec(executionEnvironment = executionEnvironment).symbolTable()
+        val st = symbolTable
         val definition = KatariEnumDefinition(
             typeId = typeId,
             entries = values.map { value ->
@@ -297,7 +297,7 @@ class NarrativeBindingsBuilder {
     }
 
     fun global(name: String, value: Any?, persistent: Boolean = false): NarrativeBindingsBuilder = apply {
-        globals[name] = toRuntimeValue(value)
+        globals[name] = value
         if (persistent) {
             persistentGlobalNames += name
         } else {
@@ -312,16 +312,17 @@ class NarrativeBindingsBuilder {
     fun build(): KatariBindings {
         val codecRegistry = KatariValueCodecRegistry(valueCodecs)
         val explicitGlobalNames = globals.keys.toSet()
-        val interpreter = KotliteInterpreter(
+        val bridgeInterpreter = KotliteInterpreter(
             filename = "<NarrativeBridge>",
             code = "",
             executionEnvironment = executionEnvironment,
         )
-        val eeGlobalProperties = executionEnvironment.getGlobalProperties(interpreter.symbolTable())
+        val symbolTable = bridgeInterpreter.symbolTable()
+        val eeGlobalProperties = executionEnvironment.getGlobalProperties(symbolTable)
         val eeGlobalPropertyNames = eeGlobalProperties.map { it.declaredName }.toSet()
-        val baseGlobals = globals.toMap()
+        val baseGlobals = globals.mapValues { (_, value) -> toRuntimeValue(value, symbolTable) }
         val computedGlobalValues = eeGlobalProperties.mapNotNull { property ->
-            property.getter?.invoke(interpreter)?.let { property.declaredName to it }
+            property.getter?.invoke(bridgeInterpreter)?.let { property.declaredName to it }
         }.toMap()
         val importGlobals = importAliases.mapNotNull { (alias, target) ->
             baseGlobals[target]?.let { alias to it }
@@ -353,7 +354,7 @@ class NarrativeBindingsBuilder {
 
         val existingNarrativeIds = narrativeCallables.map { it.id }.toSet()
         val executionEnvironmentFunctionKeys = executionEnvironment
-            .getBridgeableBuiltinFunctions(interpreter.symbolTable())
+            .getBridgeableBuiltinFunctions(symbolTable)
             .map { it.name to it.receiver?.name }
             .toSet()
         NarrativeBuiltinFunctions.definitions(NarrativeNoOpHost)
@@ -370,26 +371,26 @@ class NarrativeBindingsBuilder {
             executionEnvironment.registerNarrativeCallable(callable)
         }
         if (importExecutionEnvironmentFunctions) {
-            val declarations = executionEnvironment.getBridgeableBuiltinFunctions(interpreter.symbolTable())
+            val declarations = executionEnvironment.getBridgeableBuiltinFunctions(symbolTable)
             declarations.forEach { declaration ->
-                val callable = BridgeFunctionCallable(declaration, interpreter)
+                val callable = BridgeFunctionCallable(declaration, bridgeInterpreter)
                 narrativeCallables += callable
                 executionEnvironment.registerNarrativeCallable(callable)
             }
 
-            val extensionProperties = executionEnvironment.getExtensionProperties(interpreter.symbolTable())
+            val extensionProperties = executionEnvironment.getExtensionProperties(symbolTable)
             extensionProperties.forEach { property ->
-                property.toKatariDefinitions(interpreter).forEach {
+                property.toKatariDefinitions(bridgeInterpreter).forEach {
                     narrativeCallables += it
                     executionEnvironment.registerNarrativeCallable(it)
                 }
             }
 
-            val classes = executionEnvironment.getBuiltinClasses(interpreter.symbolTable())
+            val classes = executionEnvironment.getBuiltinClasses(symbolTable)
             classes.filter { it.isInstanceCreationAllowed }.forEach { clazz ->
                 val name = clazz.fullQualifiedName.removeSuffix("?").removeSuffix(".Companion")
                 if (narrativeCallables.none { it.id == name }) {
-                    val ctorCallable = BridgeConstructorCallable(name, clazz, interpreter)
+                    val ctorCallable = BridgeConstructorCallable(name, clazz, bridgeInterpreter)
                     narrativeCallables += ctorCallable
                     executionEnvironment.registerNarrativeCallable(ctorCallable)
                 }
@@ -416,6 +417,7 @@ class NarrativeBindingsBuilder {
                 valueCodecs = codecRegistry,
                 executionEnvironment = executionEnvironment,
                 persistentGlobalNames = persistentGlobalNames,
+                sharedSymbolTable = symbolTable,
             ),
             enumDefinitions = enumDefinitions,
             importAliases = importAliases,
@@ -525,15 +527,14 @@ class NarrativeBindingsBuilder {
         }
     }
 
-    private fun toRuntimeValue(value: Any?): RuntimeValue {
-        val st = StateSnapshotCodec(executionEnvironment = executionEnvironment).symbolTable()
+    private fun toRuntimeValue(value: Any?, symbolTable: SymbolTable): RuntimeValue {
         return when (value) {
             null -> NullValue
             is RuntimeValue -> value
-            is Boolean -> BooleanValue(value, st)
-            is Int -> IntValue(value, st)
-            is Double -> DoubleValue(value, st)
-            is String -> StringValue(value, st)
+            is Boolean -> BooleanValue(value, symbolTable)
+            is Int -> IntValue(value, symbolTable)
+            is Double -> DoubleValue(value, symbolTable)
+            is String -> StringValue(value, symbolTable)
             is Enum<*> -> {
                 val typeId = hostTypeIdByClass[value::class]
                 val definition = enumDefinitions[typeId]
@@ -546,7 +547,7 @@ class NarrativeBindingsBuilder {
             else -> {
                 val typeId = hostTypeIdByClass[value::class]
                     ?: error("Type $value is not registered for `${value::class}`")
-                NarrativeHostValue(typeId = typeId, value = value, symbolTable = st)
+                NarrativeHostValue(typeId = typeId, value = value, symbolTable = symbolTable)
             }
         }
     }

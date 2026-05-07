@@ -33,10 +33,12 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.ROOT_CALL_FRAME_ID
 import com.sunnychung.lib.multiplatform.kotlite.error.SemanticException
 import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
+import com.sunnychung.lib.multiplatform.kotlite.model.DelegatedValue
 import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionResponse
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
+import com.sunnychung.lib.multiplatform.kotlite.model.ListValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallContext
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallDispatchContext
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCallResult
@@ -445,6 +447,32 @@ class KatariInstanceTest {
 
         assertEquals(emptyMap(), restored.globals)
         assertEquals(TestNpcRef("restored:npc-2"), assertIs<NarrativeHostValue>(restored.tasks.single().localVariables.getValue("speaker")).value)
+    }
+
+    @Test
+    fun snapshotPreservesExternalValuesInsideRuntimeList() = runTest {
+        val valueRegistry = com.sunnychung.lib.multiplatform.kotlite.katari.KatariValueCodecRegistry(listOf(TestNpcCodec()))
+        val codec = StateSnapshotCodec(valueCodecs = valueRegistry)
+        val symbolTable = symbolTable()
+        val npc = NarrativeHostValue("npc", TestNpcRef("npc-3"), symbolTable)
+        val original = KatariState(
+            programVersion = 1,
+            tasks = listOf(
+                TaskState(
+                    id = "main",
+                    instructionPointer = 0,
+                    localVariables = mapOf("npcs" to ListValue(listOf(npc), symbolTable.AnyType, symbolTable)),
+                    status = TaskStatus.Ready,
+                )
+            ),
+        )
+
+        val snapshot = codec.serialize(original)
+        val restored = codec.restore(snapshot, TestRestoreContext)
+        val list = assertIs<DelegatedValue<*>>(restored.tasks.single().localVariables.getValue("npcs"))
+        val restoredNpc = assertIs<NarrativeHostValue>(assertIs<List<*>>(list.value).single())
+
+        assertEquals(TestNpcRef("restored:npc-3"), restoredNpc.value)
     }
 
     @Test

@@ -61,9 +61,10 @@ class KatariCompiler(
     private val importedEnumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
     private val nameAliases: Map<String, String> = emptyMap(),
     private val scriptNamespaces: Map<String, Set<String>> = emptyMap(),
+    private val runtimeSymbolTable: SymbolTable? = null,
 ) {
     private val symbolTable: SymbolTable by lazy {
-        KotliteInterpreter(
+        runtimeSymbolTable ?: KotliteInterpreter(
             filename = "<NarrativeCompiler>",
             code = "",
             executionEnvironment = ExecutionEnvironment(),

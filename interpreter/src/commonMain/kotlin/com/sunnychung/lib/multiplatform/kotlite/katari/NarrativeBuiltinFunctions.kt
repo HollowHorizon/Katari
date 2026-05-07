@@ -124,7 +124,7 @@ object NarrativeBuiltinFunctions {
             require(selection.optionId in options) {
                 "Unknown choice `${selection.optionId}`"
             }
-            return NarrativeCallResult.Returned(StringValue(selection.optionId, runtimeSymbolTable()))
+            return NarrativeCallResult.Returned(StringValue(selection.optionId, context.symbolTable))
         }
 
         override fun dispatch(
@@ -166,7 +166,7 @@ object NarrativeBuiltinFunctions {
             require(selected != null) {
                 "Unknown choice `${selection.optionId}`"
             }
-            return NarrativeCallResult.Returned(StringValue(selected.sourceIndex.toString(), runtimeSymbolTable()))
+            return NarrativeCallResult.Returned(StringValue(selected.sourceIndex.toString(), context.symbolTable))
         }
 
         override fun dispatch(
@@ -206,7 +206,7 @@ object NarrativeBuiltinFunctions {
             require(selection.optionId in options) {
                 "Unknown choice `${selection.optionId}`"
             }
-            return NarrativeCallResult.Returned(StringValue(selection.optionId, runtimeSymbolTable()))
+            return NarrativeCallResult.Returned(StringValue(selection.optionId, context.symbolTable))
         }
 
         override fun dispatch(
@@ -248,7 +248,7 @@ object NarrativeBuiltinFunctions {
                         enabled = enabled,
                         disabledText = disabledText,
                     ),
-                    symbolTable = runtimeSymbolTable(),
+                    symbolTable = context.symbolTable,
                 )
             )
         }
@@ -292,7 +292,7 @@ object NarrativeBuiltinFunctions {
             require(arguments.size == 1) { "`readLine` expects a single text question argument" }
             val line = response as? NarrativeTextResponse
                 ?: throw IllegalArgumentException("`readLine` expects a text response")
-            return NarrativeCallResult.Returned(StringValue(line.text, runtimeSymbolTable()))
+            return NarrativeCallResult.Returned(StringValue(line.text, context.symbolTable))
         }
 
         override fun dispatch(
@@ -322,7 +322,7 @@ object NarrativeBuiltinFunctions {
                 NarrativeHostValue(
                     typeId = KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID,
                     value = EnumEntriesIteratorValue(entries.entries),
-                    symbolTable = runtimeSymbolTable(),
+                    symbolTable = context.symbolTable,
                 )
             )
         }
@@ -351,7 +351,7 @@ object NarrativeBuiltinFunctions {
 
         override suspend fun startCall(arguments: List<RuntimeValue>, context: NarrativeCallContext): NarrativeCallResult {
             val iterator = arguments.single().enumEntriesIterator("hasNext")
-            return NarrativeCallResult.Returned(BooleanValue(iterator.index < iterator.entries.size, runtimeSymbolTable()))
+            return NarrativeCallResult.Returned(BooleanValue(iterator.index < iterator.entries.size, context.symbolTable))
         }
 
         override suspend fun resumeCall(
@@ -518,9 +518,3 @@ private data class IndexedChoiceOptionSnapshot(
     val sourceIndex: Int,
     val option: ChoiceOptionSnapshot,
 )
-
-private fun runtimeSymbolTable() = com.sunnychung.lib.multiplatform.kotlite.KotliteInterpreter(
-    filename = "<NarrativeBuiltin>",
-    code = "",
-    executionEnvironment = com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment(),
-).symbolTable()

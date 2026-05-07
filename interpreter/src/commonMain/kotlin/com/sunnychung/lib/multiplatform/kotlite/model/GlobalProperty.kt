@@ -61,17 +61,18 @@ class GlobalProperty(
     }
 
     private fun initAccessor() {
+        val boundInterpreter = interpreter
         accessor = object : RuntimeValueAccessor {
             override val type: DataType = dataType ?: throw RuntimeException("Global property `$declaredName` is not initiailized")
 
             override fun assign(z: Interpreter?, value: RuntimeValue) {
-                if (interpreter == null) return // Semantic Analyzer would assign a dummy value
-                setter?.invoke(interpreter!!, value)
+                if (boundInterpreter == null) return // Semantic Analyzer would assign a dummy value
+                setter?.invoke(boundInterpreter, value)
                     ?: throw NotImplementedError("Setter is not implemented for the global property `$declaredName`")
             }
 
             override fun read(z: Interpreter?): RuntimeValue {
-                return getter?.invoke(interpreter!!)
+                return getter?.invoke(boundInterpreter ?: throw NullPointerException())
                     ?: throw NotImplementedError("Getter is not implemented for the global property `$declaredName`")
             }
         }

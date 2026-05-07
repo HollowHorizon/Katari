@@ -7,7 +7,6 @@ import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.EnumEntriesIteratorValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionResponse
-import com.sunnychung.lib.multiplatform.kotlite.model.GlobalProperty
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
 import com.sunnychung.lib.multiplatform.kotlite.model.KatariTaskValue
 import com.sunnychung.lib.multiplatform.kotlite.model.KotlinValueHolder
@@ -21,6 +20,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeHostValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeLambdaValue
 import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValueAccessor
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
@@ -438,8 +438,8 @@ class KatariInstance(
         val value = evaluateExpression(currentState, task, instruction.expression)
         val frame = currentCallFrame(task)
         if (!instruction.declaresLocal) {
-            findComputedGlobalProperty(instruction.name)?.let { property ->
-                property.accessor.assign(value = value)
+            findComputedGlobalAccessor(instruction.name)?.let { accessor ->
+                accessor.assign(value = value)
                 return task.copy(
                     instructionPointer = task.instructionPointer + 1,
                     slots = if (instruction.expression is SlotExpression) task.slots - instruction.expression.slot else task.slots,
@@ -660,8 +660,8 @@ class KatariInstance(
             null -> task.copy(instructionPointer = nextInstructionPointer)
             is ResultTarget.Variable -> {
                 if (!resultTarget.declaresLocal) {
-                    findComputedGlobalProperty(resultTarget.name)?.let { property ->
-                        property.accessor.assign(value = value)
+                    findComputedGlobalAccessor(resultTarget.name)?.let { accessor ->
+                        accessor.assign(value = value)
                         return task.copy(instructionPointer = nextInstructionPointer)
                     }
                 }
@@ -929,18 +929,22 @@ class KatariInstance(
         if (frameValue != null) {
             return frameValue.second
         }
-        findComputedGlobalProperty(name)?.let {
-            return it.accessor.read()
+        findComputedGlobalAccessor(name)?.let {
+            return it.read()
         }
         return state.globals[name]
             ?: throw IllegalArgumentException("Variable `$name` is not defined")
     }
 
-    private fun findComputedGlobalProperty(name: String): GlobalProperty? {
+    private fun findComputedGlobalAccessor(name: String): RuntimeValueAccessor? {
         if (name in currentState.globals) return null
-        return executionEnvironment
-            .getGlobalProperties(snapshotCodec.symbolTable())
+        val symbolTable = snapshotCodec.symbolTable()
+        val property = executionEnvironment
+            .getGlobalProperties(symbolTable)
             .firstOrNull { it.declaredName == name }
+            ?: return null
+        val transformedName = symbolTable.findTransformedNameByDeclaredName(property.declaredName)
+        return symbolTable.getPropertyHolder(transformedName)
     }
 
     private fun resolveVariableReference(
