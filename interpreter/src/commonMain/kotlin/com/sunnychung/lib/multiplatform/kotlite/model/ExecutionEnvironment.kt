@@ -365,9 +365,6 @@ class ExecutionEnvironment(
         val valueArguments = arguments.drop(receiverOffset)
         val repeatedParameter = callable.valueParameters.lastOrNull()?.takeIf { it.isRepeated }
         val fixedParameters = callable.valueParameters.dropLast(if (repeatedParameter != null) 1 else 0)
-        if (valueArguments.hasPositionalArgumentAfterNamedArgument()) {
-            return null
-        }
         val distances = mutableListOf<Int>()
         val normalizedArguments = mutableListOf<RuntimeValue>()
         callable.receiverType?.let {
@@ -375,19 +372,52 @@ class ExecutionEnvironment(
             distances += computeNarrativeTypeDistance(receiver, it) ?: return null
             normalizedArguments += receiver
         }
-        val positionalArguments = valueArguments.takeWhile { it.name == null }.toMutableList()
-        val namedArguments = valueArguments.drop(positionalArguments.size)
-        val namedByName = linkedMapOf<String, NarrativeCallArgument>()
-        namedArguments.forEach { argument ->
-            val name = argument.name ?: return null
-            if (namedByName.put(name, argument) != null) return null
+        val fixedArgumentByParameterIndex = MutableList<NarrativeCallArgument?>(fixedParameters.size) { null }
+        val fixedParameterIndexByName = fixedParameters
+            .mapIndexed { index, parameter -> parameter.name to index }
+            .toMap()
+        val positionalArguments = mutableListOf<NarrativeCallArgument>()
+        val repeatedArguments = mutableListOf<NarrativeCallArgument>()
+        var hasNamedRepeatedArgument = false
+        valueArguments.forEach { argument ->
+            val name = argument.name
+            if (name != null) {
+                val fixedParameterIndex = fixedParameterIndexByName[name]
+                when {
+                    fixedParameterIndex != null -> {
+                        if (fixedArgumentByParameterIndex[fixedParameterIndex] != null) return null
+                        fixedArgumentByParameterIndex[fixedParameterIndex] = argument
+                    }
+                    repeatedParameter?.name == name -> {
+                        if (hasNamedRepeatedArgument) return null
+                        repeatedArguments += argument
+                        hasNamedRepeatedArgument = true
+                    }
+                    else -> return null
+                }
+            } else {
+                positionalArguments += argument
+            }
+        }
+        var nextPositionalParameterIndex = 0
+        positionalArguments.forEach { argument ->
+            while (
+                nextPositionalParameterIndex < fixedArgumentByParameterIndex.size &&
+                fixedArgumentByParameterIndex[nextPositionalParameterIndex] != null
+            ) {
+                nextPositionalParameterIndex++
+            }
+            if (nextPositionalParameterIndex < fixedArgumentByParameterIndex.size) {
+                fixedArgumentByParameterIndex[nextPositionalParameterIndex] = argument
+                nextPositionalParameterIndex++
+            } else if (repeatedParameter != null) {
+                repeatedArguments += argument
+            } else {
+                return null
+            }
         }
         fixedParameters.forEachIndexed { index, parameter ->
-            val argument = if (positionalArguments.isNotEmpty()) {
-                positionalArguments.removeAt(0)
-            } else {
-                namedByName.remove(parameter.name)
-            }
+            val argument = fixedArgumentByParameterIndex[index]
             if (argument != null) {
                 distances += computeNarrativeTypeDistance(argument.value, parameter.type) ?: return null
                 normalizedArguments += argument.value
@@ -400,19 +430,10 @@ class ExecutionEnvironment(
         if (repeatedParameter != null) {
             val parameter = repeatedParameter
             val repeatedType = parameter.type
-            val repeatedArguments = mutableListOf<NarrativeCallArgument>()
-            repeatedArguments += positionalArguments
-            namedByName.remove(parameter.name)?.let { repeatedArguments += it }
             repeatedArguments.forEach { argument ->
                 distances += computeNarrativeTypeDistance(argument.value, repeatedType) ?: return null
                 normalizedArguments += argument.value
             }
-            positionalArguments.clear()
-        } else if (positionalArguments.isNotEmpty()) {
-            return null
-        }
-        if (namedByName.isNotEmpty()) {
-            return null
         }
         return NarrativeSignatureMatch(
             distances = distances,
@@ -483,18 +504,6 @@ class ExecutionEnvironment(
             frontier = next
         }
         return null
-    }
-
-    private fun List<NarrativeCallArgument>.hasPositionalArgumentAfterNamedArgument(): Boolean {
-        var hasNamed = false
-        forEach { argument ->
-            if (argument.name != null) {
-                hasNamed = true
-            } else if (hasNamed) {
-                return true
-            }
-        }
-        return false
     }
 
     private val CustomFunctionParameter.isRepeated: Boolean

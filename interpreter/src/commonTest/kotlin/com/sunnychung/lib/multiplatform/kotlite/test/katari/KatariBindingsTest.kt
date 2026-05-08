@@ -473,6 +473,48 @@ class NarrativeBindingsTest {
     }
 
     @Test
+    fun executionEnvironmentFunctionsAllowPositionalArgumentsAfterNamedArgumentsInNarrative() = runTest {
+        val events = mutableListOf<String>()
+        val bindings = NarrativeBindings {
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(
+                    CustomFunctionParameter("first", "String"),
+                    CustomFunctionParameter("second", "String"),
+                    CustomFunctionParameter("third", "String", "\"default\""),
+                ),
+            ) { arguments, _ ->
+                events += arguments.joinToString("|") { (it as StringValue).value }
+                UnitValue
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    capture(second = "named", "positional")
+                """.trimIndent(),
+                bindings
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(listOf("positional|named|default"), events)
+    }
+
+    @Test
     fun executionEnvironmentVarargFunctionsAreAvailableInNarrative() = runTest {
         val events = mutableListOf<String>()
         val bindings = NarrativeBindings {
