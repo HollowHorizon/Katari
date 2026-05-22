@@ -23,7 +23,12 @@ import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValueAccessor
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayValue
+import com.sunnychung.lib.multiplatform.kotlite.model.StructValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
+import com.sunnychung.lib.multiplatform.kotlite.model.UnitValue
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeValue
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -213,11 +218,11 @@ class KatariInstance(
                                     task = applyExitCallFrameInstruction(task, instruction, returnValue),
                                 )
                             }
-                            is RemoveVariablesInstruction -> {
-                                val frame = currentCallFrame(task)
-                                val names = instruction.names.toSet()
-                                val updatedFrame = frame.copy(localVariables = frame.localVariables - names)
-                                val nextTask = syncTopLocals(
+                is RemoveVariablesInstruction -> {
+                    val frame = currentCallFrame(task)
+                    val names = instruction.names.toSet()
+                    val updatedFrame = frame.copy(localVariables = frame.localVariables - names)
+                    val nextTask = syncTopLocals(
                                     task.copy(
                                         instructionPointer = task.instructionPointer + 1,
                                         callFrames = task.callFrames.replaceLast(updatedFrame),
@@ -226,10 +231,32 @@ class KatariInstance(
                                                 slotValue.frameId != frame.id || slotValue.name !in names
                                         },
                                     )
-                                )
-                                currentState = currentState.updateTask(index = taskIndex, task = nextTask)
-                            }
-                        }
+                   )
+                   currentState = currentState.updateTask(index = taskIndex, task = nextTask)
+               }
+                is BeginXmlNodeInstruction -> {
+                    currentState = currentState.updateTask(
+                        index = taskIndex,
+                        task = beginXmlNode(task, instruction),
+                    )
+                }
+                is AppendXmlChildrenInstruction -> {
+                    val referencedSlots = collectReferencedSlots(instruction.expression)
+                    currentState = currentState.updateTask(
+                        index = taskIndex,
+                        task = cleanupSlots(
+                            task = appendXmlChildren(task, instruction),
+                            slotsToRemove = referencedSlots,
+                        ),
+                    )
+                }
+                is EndXmlNodeInstruction -> {
+                    currentState = currentState.updateTask(
+                        index = taskIndex,
+                        task = endXmlNode(task, instruction),
+                    )
+                }
+           }
                     } catch (e: Throwable) {
                         if (e is CancellationException) {
                             throw e
@@ -725,6 +752,64 @@ class KatariInstance(
         }
     }
 
+    private fun beginXmlNode(task: TaskState, instruction: BeginXmlNodeInstruction): TaskState {
+        val attributes = instruction.attributes.map { attribute ->
+            XmlAttributeValue(
+                name = attribute.name,
+                value = evaluateExpression(currentState, task, attribute.value),
+            )
+        }
+        return task.copy(
+            instructionPointer = task.instructionPointer + 1,
+            xmlBuilders = task.xmlBuilders + XmlBuilderState(
+                name = instruction.name,
+                attributes = attributes,
+            ),
+        )
+    }
+
+    private fun appendXmlChildren(task: TaskState, instruction: AppendXmlChildrenInstruction): TaskState {
+        require(task.xmlBuilders.isNotEmpty()) {
+            "XML child expression requires an outer XML literal"
+        }
+        val children = evaluateExpression(currentState, task, instruction.expression).asXmlChildren()
+        if (children.isEmpty()) {
+            return task.copy(instructionPointer = task.instructionPointer + 1)
+        }
+        val builders = task.xmlBuilders.toMutableList()
+        builders[builders.lastIndex] = builders.last().copy(children = builders.last().children + children)
+        return task.copy(instructionPointer = task.instructionPointer + 1, xmlBuilders = builders)
+    }
+
+    private fun endXmlNode(task: TaskState, instruction: EndXmlNodeInstruction): TaskState {
+        val builder = task.xmlBuilders.lastOrNull()
+            ?: throw IllegalStateException("Cannot close XML literal because no XML builder is active")
+        val node = XmlValue(
+            name = builder.name,
+            attributes = builder.attributes,
+            children = builder.children,
+            symbolTable = snapshotCodec.symbolTable(),
+        )
+        val remainingBuilders = task.xmlBuilders.dropLast(1)
+        if (instruction.resultTarget == null) {
+            require(remainingBuilders.isNotEmpty()) {
+                "XML literal statement requires an outer XML literal"
+            }
+            val builders = remainingBuilders.toMutableList()
+            builders[builders.lastIndex] = builders.last().copy(children = builders.last().children + node)
+            return task.copy(
+                instructionPointer = task.instructionPointer + 1,
+                xmlBuilders = builders,
+            )
+        }
+        return applyResultTarget(
+            task = task.copy(xmlBuilders = remainingBuilders),
+            resultTarget = instruction.resultTarget,
+            value = node,
+            nextInstructionPointer = task.instructionPointer + 1,
+        )
+    }
+
     private fun evaluateSlotReference(
         state: KatariState,
         task: TaskState,
@@ -818,6 +903,29 @@ class KatariInstance(
                             )
                     }
                 }
+                is XmlNodeExpression -> XmlValue(
+                    name = expression.name,
+                    attributes = expression.attributes.map { attribute ->
+                        XmlAttributeValue(
+                            name = attribute.name,
+                            value = evaluateExpression(state, task, attribute.value),
+                        )
+                    },
+                    children = expression.children.flatMap { child ->
+                        evaluateExpression(state, task, child).asXmlChildren()
+                    },
+                    symbolTable = snapshotCodec.symbolTable(),
+                )
+                is StructExpression -> StructValue(
+                    fields = expression.fields.associate { field ->
+                        field.key to evaluateExpression(state, task, field.value)
+                    },
+                    symbolTable = snapshotCodec.symbolTable(),
+                )
+                is StructArrayExpression -> StructArrayValue(
+                    elements = expression.elements.map { evaluateExpression(state, task, it) },
+                    symbolTable = snapshotCodec.symbolTable(),
+                )
                 is UnaryExpression -> {
                     val operand = evaluateExpression(state, task, expression.operand)
                     when (expression.operator) {
@@ -1114,6 +1222,11 @@ class KatariInstance(
             is EnumEntriesExpression -> emptySet()
             is EnumValueOfExpression -> collectReferencedSlots(expression.entryName)
             is EnumPropertyExpression -> collectReferencedSlots(expression.receiver)
+            is XmlNodeExpression ->
+                expression.attributes.flatMapTo(linkedSetOf()) { collectReferencedSlots(it.value) } +
+                    expression.children.flatMapTo(linkedSetOf()) { collectReferencedSlots(it) }
+            is StructExpression -> expression.fields.flatMapTo(linkedSetOf()) { collectReferencedSlots(it.value) }
+            is StructArrayExpression -> expression.elements.flatMapTo(linkedSetOf()) { collectReferencedSlots(it) }
             is UnaryExpression -> collectReferencedSlots(expression.operand)
             is BinaryExpression -> collectReferencedSlots(expression.left) + collectReferencedSlots(expression.right)
         }
@@ -1257,6 +1370,21 @@ class KatariInstance(
 
     private fun RuntimeValue.asString(): String {
         return convertToString()
+    }
+
+    private fun RuntimeValue.asXmlChildren(): List<XmlValue> {
+        return when (this) {
+            is XmlValue -> listOf(this)
+            is StructArrayValue -> elements.flatMap { it.asXmlChildren() }
+            is NullValue, UnitValue -> emptyList()
+            is KotlinValueHolder<*> -> {
+                val iterable = value as? Iterable<*> ?: return emptyList()
+                iterable.flatMap { element ->
+                    (element as? RuntimeValue)?.asXmlChildren().orEmpty()
+                }
+            }
+            else -> emptyList()
+        }
     }
 
     private fun slotVariableName(slot: Int): String = "$SLOT_VARIABLE_PREFIX$slot"

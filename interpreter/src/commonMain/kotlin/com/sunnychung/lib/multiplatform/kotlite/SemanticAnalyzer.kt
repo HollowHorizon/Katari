@@ -89,6 +89,11 @@ import com.sunnychung.lib.multiplatform.kotlite.model.SemanticDummyRuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
+import com.sunnychung.lib.multiplatform.kotlite.model.STRUCT_ARRAY_VALUE_TYPE_ID
+import com.sunnychung.lib.multiplatform.kotlite.model.STRUCT_VALUE_TYPE_ID
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructEntryLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolReferenceSet
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTableTypeVisitCache
@@ -107,6 +112,9 @@ import com.sunnychung.lib.multiplatform.kotlite.model.WhenEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenSubjectNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XML_VALUE_TYPE_ID
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.isNonNullIntegralType
 import com.sunnychung.lib.multiplatform.kotlite.model.isNonNullNumberType
 import com.sunnychung.lib.multiplatform.kotlite.model.isNonNullNumberTypeOrByte
@@ -122,6 +130,7 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
     var functionDefIndex = 0
     var variableDefIndex = 0
     val symbolRecorders = mutableListOf<SymbolReferenceSet>()
+    private var xmlBuilderScopeDepth = 0
 
     // a cache of common types for optimization. not a must to use them
     val typeRegistry = listOf(
@@ -355,6 +364,11 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
             is EnumEntryNode -> this.visit(modifier = modifier)
             is ForNode -> this.visit(modifier = modifier)
             is ValueParameterDeclarationNode -> this.visit(modifier = modifier)
+            is XmlNodeLiteralNode -> this.visit(modifier = modifier)
+            is XmlAttributeLiteralNode -> this.visit(modifier = modifier)
+            is StructLiteralNode -> this.visit(modifier = modifier)
+            is StructEntryLiteralNode -> this.visit(modifier = modifier)
+            is StructArrayLiteralNode -> this.visit(modifier = modifier)
             is NarrativeCheckpointNode -> {}
             is NarrativeJumpNode -> {}
             is NarrativeChooseNode -> {}
@@ -2251,6 +2265,33 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
         nodes.forEach { it.visit(modifier = modifier) }
     }
 
+    fun XmlNodeLiteralNode.visit(modifier: Modifier = Modifier()) {
+        appendsToOuterXml = xmlBuilderScopeDepth > 0
+        attributes.forEach { it.visit(modifier = modifier) }
+        ++xmlBuilderScopeDepth
+        try {
+            children.forEach { it.visit(modifier = modifier) }
+        } finally {
+            --xmlBuilderScopeDepth
+        }
+    }
+
+    fun XmlAttributeLiteralNode.visit(modifier: Modifier = Modifier()) {
+        value.visit(modifier = modifier)
+    }
+
+    fun StructLiteralNode.visit(modifier: Modifier = Modifier()) {
+        entries.forEach { it.visit(modifier = modifier) }
+    }
+
+    fun StructEntryLiteralNode.visit(modifier: Modifier = Modifier()) {
+        value.visit(modifier = modifier)
+    }
+
+    fun StructArrayLiteralNode.visit(modifier: Modifier = Modifier()) {
+        elements.forEach { it.visit(modifier = modifier) }
+    }
+
     fun LambdaLiteralNode.visit(modifier: Modifier = Modifier()) {
 //        val type = type() as FunctionTypeNode
 
@@ -2684,6 +2725,15 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
             is EnumEntryNode -> TODO()
             is ForNode -> typeRegistry["Unit"]!!
             is ValueParameterDeclarationNode -> TODO()
+            is XmlNodeLiteralNode -> if (appendsToOuterXml) {
+                typeRegistry["Unit"]!!
+            } else {
+                TypeNode(SourcePosition.NONE, XML_VALUE_TYPE_ID, null, false)
+            }
+            is XmlAttributeLiteralNode -> typeRegistry["Unit"]!!
+            is StructLiteralNode -> TypeNode(SourcePosition.NONE, STRUCT_VALUE_TYPE_ID, null, false)
+            is StructEntryLiteralNode -> typeRegistry["Unit"]!!
+            is StructArrayLiteralNode -> TypeNode(SourcePosition.NONE, STRUCT_ARRAY_VALUE_TYPE_ID, null, false)
             is NarrativeCheckpointNode -> typeRegistry["Unit"]!!
             is NarrativeJumpNode -> typeRegistry["Unit"]!!
             is NarrativeChooseNode -> typeRegistry["Unit"]!!

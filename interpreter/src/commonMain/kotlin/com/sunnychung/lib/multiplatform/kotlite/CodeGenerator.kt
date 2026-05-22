@@ -50,6 +50,9 @@ import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringFieldIdentifierNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructEntryLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ThrowNode
 import com.sunnychung.lib.multiplatform.kotlite.model.TryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.TypeNode
@@ -63,6 +66,8 @@ import com.sunnychung.lib.multiplatform.kotlite.model.WhenEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenSubjectNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
 
 open class CodeGenerator(protected val node: ASTNode, val isPrintDebugInfo: Boolean = false) {
     var indentLevel = 0
@@ -139,6 +144,11 @@ open class CodeGenerator(protected val node: ASTNode, val isPrintDebugInfo: Bool
             is NarrativeAsyncNode -> this.generate()
             is NarrativeRaceNode -> this.generate()
             is NarrativeRaceEntryNode -> this.generate()
+            is XmlNodeLiteralNode -> this.generate()
+            is XmlAttributeLiteralNode -> this.generate()
+            is StructLiteralNode -> this.generate()
+            is StructEntryLiteralNode -> this.generate()
+            is StructArrayLiteralNode -> this.generate()
             is KatariImportNode -> ""
     }
 
@@ -261,6 +271,22 @@ open class CodeGenerator(protected val node: ASTNode, val isPrintDebugInfo: Bool
     protected fun StringLiteralNode.generate() = content
 
     protected fun StringFieldIdentifierNode.generate(): String = (this as VariableReferenceNode).generate()
+
+    protected fun XmlNodeLiteralNode.generate(): String {
+        val attrs = attributes.joinToString(" ") { it.generate() }.let { if (it.isEmpty()) "" else " $it" }
+        if (children.isEmpty()) return "<$name$attrs />"
+        return "<$name$attrs>${children.joinToString("") { it.generate() }}</$name>"
+    }
+
+    protected fun XmlAttributeLiteralNode.generate() = "$name=${value.generate()}"
+
+    protected fun StructLiteralNode.generate() =
+        entries.joinToString(prefix = "struct {", postfix = "}") { it.generate() }
+
+    protected fun StructEntryLiteralNode.generate() = "$key: ${value.generate()}"
+
+    protected fun StructArrayLiteralNode.generate() =
+        elements.joinToString(prefix = "[", postfix = "]") { it.generate() }
 
     protected fun LambdaLiteralNode.generate()
         = debug("<p=${accessedRefs!!.properties}; f=${accessedRefs!!.functions}; c=${accessedRefs!!.classes}>") +

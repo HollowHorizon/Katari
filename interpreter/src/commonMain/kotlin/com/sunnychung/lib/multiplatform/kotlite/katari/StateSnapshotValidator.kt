@@ -45,6 +45,22 @@ object StateSnapshotValidator {
                     )
                 }
             }
+            task.xmlBuilders.forEachIndexed { builderIndex, builder ->
+                builder.attributes.forEachIndexed { attributeIndex, attribute ->
+                    validateValueRef(
+                        path = "tasks[$taskIndex].xmlBuilders[$builderIndex].attributes[$attributeIndex].valueRef",
+                        ref = attribute.valueRef,
+                        values = snapshot.values,
+                    )
+                }
+                builder.children.forEachIndexed { childIndex, ref ->
+                    validateValueRef(
+                        path = "tasks[$taskIndex].xmlBuilders[$builderIndex].children[$childIndex]",
+                        ref = ref,
+                        values = snapshot.values,
+                    )
+                }
+            }
         }
         snapshot.values.forEach { (valueId, value) ->
             validateNestedValueRefs(
@@ -71,6 +87,36 @@ object StateSnapshotValidator {
             is KatariTaskValueSnapshot -> value.capturedVariableRefs.forEach { (name, ref) ->
                 validateValueRef(
                     path = "$path.capturedVariableRefs[$name]",
+                    ref = ref,
+                    values = values,
+                )
+            }
+            is XmlValueSnapshot -> {
+                value.attributes.forEachIndexed { index, attribute ->
+                    validateValueRef(
+                        path = "$path.attributes[$index].valueRef",
+                        ref = attribute.valueRef,
+                        values = values,
+                    )
+                }
+                value.children.forEachIndexed { index, ref ->
+                    validateValueRef(
+                        path = "$path.children[$index]",
+                        ref = ref,
+                        values = values,
+                    )
+                }
+            }
+            is StructValueSnapshot -> value.fields.forEach { (name, ref) ->
+                validateValueRef(
+                    path = "$path.fields[$name]",
+                    ref = ref,
+                    values = values,
+                )
+            }
+            is StructArrayValueSnapshot -> value.elements.forEachIndexed { index, ref ->
+                validateValueRef(
+                    path = "$path.elements[$index]",
                     ref = ref,
                     values = values,
                 )

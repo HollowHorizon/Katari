@@ -97,6 +97,11 @@ import com.sunnychung.lib.multiplatform.kotlite.model.SpecialFunction
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayValue
+import com.sunnychung.lib.multiplatform.kotlite.model.StructEntryLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
 import com.sunnychung.lib.multiplatform.kotlite.model.ThrowNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ThrowableValue
@@ -114,6 +119,10 @@ import com.sunnychung.lib.multiplatform.kotlite.model.WhenEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenSubjectNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeValue
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlValue
 import com.sunnychung.lib.multiplatform.kotlite.util.ClassMemberResolver
 
 open class Interpreter(val rootNode: ASTNode, val executionEnvironment: ExecutionEnvironment) {
@@ -200,6 +209,11 @@ open class Interpreter(val rootNode: ASTNode, val executionEnvironment: Executio
             is EnumEntryNode -> TODO()
             is ForNode -> this.eval()
             is ValueParameterDeclarationNode -> TODO()
+            is XmlNodeLiteralNode -> this.eval()
+            is XmlAttributeLiteralNode -> this.eval()
+            is StructLiteralNode -> this.eval()
+            is StructEntryLiteralNode -> this.eval()
+            is StructArrayLiteralNode -> this.eval()
             is NarrativeCheckpointNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
             is NarrativeJumpNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
             is NarrativeChooseNode -> throw UnsupportedOperationException("Narrative node is not supported by default interpreter")
@@ -1782,6 +1796,31 @@ open class Interpreter(val rootNode: ASTNode, val executionEnvironment: Executio
     }
 
     fun StringLiteralNode.eval() = StringValue(content)
+    fun XmlNodeLiteralNode.eval(): XmlValue {
+        return XmlValue(
+            name = name,
+            attributes = attributes.map { it.eval() },
+            children = children.flatMap { child ->
+                when (val value = child.eval()) {
+                    is XmlValue -> listOf(value)
+                    is StructArrayValue -> value.elements.filterIsInstance<XmlValue>()
+                    is NullValue, UnitValue -> emptyList()
+                    else -> emptyList()
+                }
+            },
+            symbolTable = symbolTable(),
+        )
+    }
+    fun XmlAttributeLiteralNode.eval() = XmlAttributeValue(name, value.eval() as RuntimeValue)
+    fun StructLiteralNode.eval() = StructValue(
+        entries.associate { it.key to (it.value.eval() as RuntimeValue) },
+        symbolTable(),
+    )
+    fun StructEntryLiteralNode.eval() = value.eval() as RuntimeValue
+    fun StructArrayLiteralNode.eval() = StructArrayValue(
+        elements.map { it.eval() as RuntimeValue },
+        symbolTable(),
+    )
 
     fun IntegerNode.eval() = IntValue(value)
     fun LongNode.eval() = LongValue(value)

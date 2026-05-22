@@ -24,8 +24,12 @@ import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeMapEntry
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValueSnapshotIterator
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayValue
+import com.sunnychung.lib.multiplatform.kotlite.model.StructValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
 import com.sunnychung.lib.multiplatform.kotlite.model.toTypeNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeValue
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlValue
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.plus
 import kotlinx.serialization.modules.polymorphic
@@ -68,6 +72,7 @@ class StateSnapshotCodec(
                 },
                 nextCallFrameId = task.nextCallFrameId,
                 slots = task.slots.mapValues { (_, value) -> serializeSlot(value) },
+                xmlBuilders = task.xmlBuilders.map { builder -> serializeXmlBuilder(builder, valueTable) },
                 status = serializeStatus(task.status),
                 resultRef = task.result?.let { valueTable.reference(it) },
                 raceGroupId = task.raceGroupId,
@@ -127,6 +132,9 @@ class StateSnapshotCodec(
                     callFrames = restoredFrames,
                     nextCallFrameId = task.nextCallFrameId,
                     slots = task.slots.mapValues { (_, value) -> restoreSlot(value) },
+                    xmlBuilders = task.xmlBuilders.map { builder ->
+                        restoreXmlBuilder(builder) { ref -> restoreSharedValue(ref.valueId) }
+                    },
                     status = restoreStatus(task.status),
                     result = task.resultRef?.let { sharedValues.getValue(it.valueId) },
                     raceGroupId = task.raceGroupId,
@@ -182,6 +190,22 @@ class StateSnapshotCodec(
                 entries = value.entries.map {
                     serializeValue(it, valueTable) as EnumValueSnapshot
                 },
+            )
+            is XmlValue -> XmlValueSnapshot(
+                name = value.name,
+                attributes = value.attributes.map {
+                    XmlAttributeValueSnapshot(
+                        name = it.name,
+                        valueRef = valueTable.reference(it.value),
+                    )
+                },
+                children = value.children.map { valueTable.reference(it) },
+            )
+            is StructValue -> StructValueSnapshot(
+                fields = value.fields.mapValues { (_, fieldValue) -> valueTable.reference(fieldValue) },
+            )
+            is StructArrayValue -> StructArrayValueSnapshot(
+                elements = value.elements.map { valueTable.reference(it) },
             )
             is NarrativeHostValue -> {
                 if (value.typeId == CHOICE_OPTION_TYPE_ID) {
@@ -251,6 +275,25 @@ class StateSnapshotCodec(
                 entries = snapshot.entries.map { restoreValue(it, context, restoreReference) as NarrativeEnumValue },
                 symbolTable = symbolTable(),
             )
+            is XmlValueSnapshot -> XmlValue(
+                name = snapshot.name,
+                attributes = snapshot.attributes.map {
+                    XmlAttributeValue(
+                        name = it.name,
+                        value = restoreReference(it.valueRef),
+                    )
+                },
+                children = snapshot.children.map { restoreReference(it) as XmlValue },
+                symbolTable = symbolTable(),
+            )
+            is StructValueSnapshot -> StructValue(
+                fields = snapshot.fields.mapValues { (_, ref) -> restoreReference(ref) },
+                symbolTable = symbolTable(),
+            )
+            is StructArrayValueSnapshot -> StructArrayValue(
+                elements = snapshot.elements.map { restoreReference(it) },
+                symbolTable = symbolTable(),
+            )
             is EnumEntriesIteratorValueSnapshot -> NarrativeHostValue(
                 typeId = KATARI_ENUM_ENTRIES_ITERATOR_TYPE_ID,
                 value = EnumEntriesIteratorValue(
@@ -293,6 +336,38 @@ class StateSnapshotCodec(
                 frameId = slot.frameId,
             )
         }
+    }
+
+    private fun serializeXmlBuilder(
+        builder: XmlBuilderState,
+        valueTable: NarrativeSnapshotValueTable,
+    ): XmlBuilderSnapshot {
+        return XmlBuilderSnapshot(
+            name = builder.name,
+            attributes = builder.attributes.map { attribute ->
+                XmlAttributeValueSnapshot(
+                    name = attribute.name,
+                    valueRef = valueTable.reference(attribute.value),
+                )
+            },
+            children = builder.children.map { valueTable.reference(it) },
+        )
+    }
+
+    private suspend fun restoreXmlBuilder(
+        builder: XmlBuilderSnapshot,
+        restoreReference: suspend (ValueReferenceSnapshot) -> RuntimeValue,
+    ): XmlBuilderState {
+        return XmlBuilderState(
+            name = builder.name,
+            attributes = builder.attributes.map { attribute ->
+                XmlAttributeValue(
+                    name = attribute.name,
+                    value = restoreReference(attribute.valueRef),
+                )
+            },
+            children = builder.children.map { restoreReference(it) as XmlValue },
+        )
     }
 
     private fun restoreSlot(slot: SlotSnapshot): SlotValue {

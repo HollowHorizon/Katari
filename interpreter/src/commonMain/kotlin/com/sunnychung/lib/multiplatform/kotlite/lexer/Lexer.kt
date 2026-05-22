@@ -355,7 +355,6 @@ open class Lexer(
                                 if (currentChar() != '\'') {
                                     throw RuntimeException("Invalid single quoted literal")
                                 }
-                                advanceChar()
                                 if (literal.length == 1) {
                                     return Token(TokenType.Char, literal.first(), position, makeSourcePosition())
                                 }

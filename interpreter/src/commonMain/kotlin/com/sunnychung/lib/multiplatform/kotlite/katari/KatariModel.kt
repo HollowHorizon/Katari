@@ -4,6 +4,8 @@ import com.sunnychung.lib.multiplatform.kotlite.model.DefaultArgumentMarker
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumValue
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeValue
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlValue
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Polymorphic
 import kotlinx.serialization.SerialName
@@ -103,6 +105,22 @@ data class RemoveVariablesInstruction(
     override val position: SourcePosition? = null,
 ) : KatariInstruction
 
+data class BeginXmlNodeInstruction(
+    val name: String,
+    val attributes: List<XmlAttributeExpression>,
+    override val position: SourcePosition? = null,
+) : KatariInstruction
+
+data class AppendXmlChildrenInstruction(
+    val expression: KatariExpression,
+    override val position: SourcePosition? = null,
+) : KatariInstruction
+
+data class EndXmlNodeInstruction(
+    val resultTarget: ResultTarget? = null,
+    override val position: SourcePosition? = null,
+) : KatariInstruction
+
 data class ChoiceOption(
     val id: String,
     val text: KatariExpression,
@@ -153,6 +171,33 @@ data class EnumValueOfExpression(
 data class EnumPropertyExpression(
     val receiver: KatariExpression,
     val propertyName: String,
+    override val position: SourcePosition? = null,
+) : KatariExpression
+
+data class XmlNodeExpression(
+    val name: String,
+    val attributes: List<XmlAttributeExpression>,
+    val children: List<KatariExpression>,
+    override val position: SourcePosition? = null,
+) : KatariExpression
+
+data class XmlAttributeExpression(
+    val name: String,
+    val value: KatariExpression,
+)
+
+data class StructExpression(
+    val fields: List<StructFieldExpression>,
+    override val position: SourcePosition? = null,
+) : KatariExpression
+
+data class StructFieldExpression(
+    val key: String,
+    val value: KatariExpression,
+)
+
+data class StructArrayExpression(
+    val elements: List<KatariExpression>,
     override val position: SourcePosition? = null,
 ) : KatariExpression
 
@@ -237,6 +282,7 @@ data class TaskState(
     val callFrames: List<CallFrameState> = emptyList(),
     val nextCallFrameId: Int = ROOT_CALL_FRAME_ID + 1,
     val slots: Map<Int, SlotValue> = emptyMap(),
+    val xmlBuilders: List<XmlBuilderState> = emptyList(),
     val status: TaskStatus = TaskStatus.Ready,
     val result: RuntimeValue? = null,
     val raceGroupId: String? = null,
@@ -257,6 +303,19 @@ sealed interface SlotValue {
         val frameId: Int? = null,
     ) : SlotValue
 }
+
+data class XmlBuilderState(
+    val name: String,
+    val attributes: List<XmlAttributeValue>,
+    val children: List<XmlValue> = emptyList(),
+)
+
+@Serializable
+data class XmlBuilderSnapshot(
+    val name: String,
+    val attributes: List<XmlAttributeValueSnapshot>,
+    val children: List<ValueReferenceSnapshot> = emptyList(),
+)
 
 sealed interface TaskStatus {
     data object Ready : TaskStatus
@@ -308,6 +367,7 @@ data class TaskSnapshot(
     val callFrames: List<CallFrameSnapshot>,
     val nextCallFrameId: Int,
     val slots: Map<Int, SlotSnapshot>,
+    val xmlBuilders: List<XmlBuilderSnapshot> = emptyList(),
     val status: TaskStatusSnapshot,
     val resultRef: ValueReferenceSnapshot? = null,
     val raceGroupId: String? = null,
@@ -485,6 +545,32 @@ data class RuntimeMapEntrySnapshot(
 )
 
 @Serializable
+@SerialName("xml_value")
+data class XmlValueSnapshot(
+    val name: String,
+    val attributes: List<XmlAttributeValueSnapshot>,
+    val children: List<ValueReferenceSnapshot>,
+) : ValueSnapshot()
+
+@Serializable
+data class XmlAttributeValueSnapshot(
+    val name: String,
+    val valueRef: ValueReferenceSnapshot,
+)
+
+@Serializable
+@SerialName("struct_value")
+data class StructValueSnapshot(
+    val fields: Map<String, ValueReferenceSnapshot>,
+) : ValueSnapshot()
+
+@Serializable
+@SerialName("struct_array")
+data class StructArrayValueSnapshot(
+    val elements: List<ValueReferenceSnapshot>,
+) : ValueSnapshot()
+
+@Serializable
 @SerialName("runtime_pair")
 data class RuntimePairValueSnapshot(
     val firstType: String,
@@ -560,6 +646,9 @@ class KatariValueCodecRegistry(
                 subclass(RuntimePairValueSnapshot::class, RuntimePairValueSnapshot.serializer())
                 subclass(RuntimeIteratorValueSnapshot::class, RuntimeIteratorValueSnapshot.serializer())
                 subclass(RuntimeMapEntryValueSnapshot::class, RuntimeMapEntryValueSnapshot.serializer())
+                subclass(XmlValueSnapshot::class, XmlValueSnapshot.serializer())
+                subclass(StructValueSnapshot::class, StructValueSnapshot.serializer())
+                subclass(StructArrayValueSnapshot::class, StructArrayValueSnapshot.serializer())
                 codecsByTypeId.values.forEach {
                     @Suppress("UNCHECKED_CAST")
                     subclass(

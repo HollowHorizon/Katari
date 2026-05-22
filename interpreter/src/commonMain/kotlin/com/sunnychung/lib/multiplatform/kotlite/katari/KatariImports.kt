@@ -26,6 +26,9 @@ import com.sunnychung.lib.multiplatform.kotlite.model.ReturnNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructEntryLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ThrowNode
 import com.sunnychung.lib.multiplatform.kotlite.model.TryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.TypeNode
@@ -35,6 +38,8 @@ import com.sunnychung.lib.multiplatform.kotlite.model.WhenConditionNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
 
 data class KatariSourceRequest(
     val path: String,
@@ -224,6 +229,14 @@ private fun ASTNode.transformKatariNode(
             declaredValueParameters = declaredValueParameters.map { it.transformParameter(functionNames, mapFunctionName) },
             body = body.transformBlock(functionNames, mapFunctionName),
         )
+        is XmlNodeLiteralNode -> copy(
+            attributes = attributes.map { it.copy(value = it.value.transform()) },
+            children = children.map { it.transform() },
+        )
+        is XmlAttributeLiteralNode -> copy(value = value.transform())
+        is StructLiteralNode -> copy(entries = entries.map { it.transform() as StructEntryLiteralNode })
+        is StructEntryLiteralNode -> copy(value = value.transform())
+        is StructArrayLiteralNode -> copy(elements = elements.map { it.transform() })
         is StringNode -> StringNode(position, nodes.map { it.transform() })
         else -> this
     }

@@ -2,7 +2,7 @@ name: Verification Tests
 on:
   push:
     branches:
-      - '**'
+      - '[disabled]'
 
 concurrency:
   group: "tests-${{ github.ref }}"

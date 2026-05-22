@@ -40,6 +40,112 @@ private fun syntheticEnumClass(typeId: String, symbolTable: SymbolTable): ClassD
     )
 }
 
+private fun syntheticDataClass(typeId: String, symbolTable: SymbolTable): ClassDefinition {
+    return symbolTable.findClass(typeId)?.first ?: ClassDefinition(
+        currentScope = symbolTable,
+        name = typeId,
+        fullQualifiedName = typeId,
+        modifiers = emptySet(),
+        typeParameters = emptyList(),
+        isInstanceCreationAllowed = false,
+        orderedInitializersAndPropertyDeclarations = emptyList(),
+        declarations = emptyList(),
+        rawMemberProperties = emptyList(),
+        memberFunctions = emptyList(),
+        primaryConstructor = null,
+    )
+}
+
+sealed interface KatariDataValue : RuntimeValue
+
+data class XmlAttributeValue(
+    val name: String,
+    val value: RuntimeValue,
+)
+
+class XmlValue(
+    val name: String,
+    val attributes: List<XmlAttributeValue>,
+    val children: List<XmlValue>,
+    private val symbolTable: SymbolTable,
+) : KatariDataValue {
+    override fun type(): DataType = ObjectType(
+        clazz = syntheticDataClass(XML_VALUE_TYPE_ID, symbolTable),
+        arguments = emptyList(),
+        isNullable = false,
+        superTypes = listOf(AnyType()),
+    )
+
+    override fun convertToString(): String {
+        val attrs = attributes.joinToString("") { " ${it.name}=\"${it.value.convertToString()}\"" }
+        if (children.isEmpty()) return "<$name$attrs />"
+        return "<$name$attrs>${children.joinToString("") { it.convertToString() }}</$name>"
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is XmlValue) return false
+        return name == other.name && attributes == other.attributes && children == other.children
+    }
+
+    override fun hashCode(): Int {
+        var result = name.hashCode()
+        result = 31 * result + attributes.hashCode()
+        result = 31 * result + children.hashCode()
+        return result
+    }
+}
+
+class StructValue(
+    val fields: Map<String, RuntimeValue>,
+    private val symbolTable: SymbolTable,
+) : KatariDataValue {
+    override fun type(): DataType = ObjectType(
+        clazz = syntheticDataClass(STRUCT_VALUE_TYPE_ID, symbolTable),
+        arguments = emptyList(),
+        isNullable = false,
+        superTypes = listOf(AnyType()),
+    )
+
+    override fun convertToString(): String {
+        return fields.entries.joinToString(prefix = "struct {", postfix = "}") { (key, value) ->
+            "$key: ${value.convertToString()}"
+        }
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is StructValue) return false
+        return fields == other.fields
+    }
+
+    override fun hashCode(): Int = fields.hashCode()
+}
+
+class StructArrayValue(
+    val elements: List<RuntimeValue>,
+    private val symbolTable: SymbolTable,
+) : KatariDataValue {
+    override fun type(): DataType = ObjectType(
+        clazz = syntheticDataClass(STRUCT_ARRAY_VALUE_TYPE_ID, symbolTable),
+        arguments = emptyList(),
+        isNullable = false,
+        superTypes = listOf(AnyType()),
+    )
+
+    override fun convertToString(): String {
+        return elements.joinToString(prefix = "[", postfix = "]") { it.convertToString() }
+    }
+
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is StructArrayValue) return false
+        return elements == other.elements
+    }
+
+    override fun hashCode(): Int = elements.hashCode()
+}
+
 class NarrativeEnumValue(
     val typeId: String,
     val entryName: String,
@@ -172,3 +278,6 @@ class KatariTaskValue(
 }
 
 const val KATARI_TASK_TYPE_ID: String = "KatariTask"
+const val XML_VALUE_TYPE_ID: String = "XmlValue"
+const val STRUCT_VALUE_TYPE_ID: String = "StructValue"
+const val STRUCT_ARRAY_VALUE_TYPE_ID: String = "StructArrayValue"

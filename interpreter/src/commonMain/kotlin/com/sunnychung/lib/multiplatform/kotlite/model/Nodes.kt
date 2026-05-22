@@ -45,6 +45,64 @@ data class ValueNode(override val position: SourcePosition, val value: RuntimeVa
     }
 }
 
+data class XmlNodeLiteralNode(
+    override val position: SourcePosition,
+    val name: String,
+    val attributes: List<XmlAttributeLiteralNode>,
+    val children: List<ASTNode>,
+) : ASTNode {
+    var appendsToOuterXml: Boolean = false
+
+    override fun toMermaid(): String {
+        val self = "${generateId()}[\"Xml <$name>\"]"
+        return "$self\n" +
+            attributes.joinToString("") { "$self-- attribute -->${it.toMermaid()}\n" } +
+            children.joinToString("") { "$self-- child -->${it.toMermaid()}\n" }
+    }
+}
+
+data class XmlAttributeLiteralNode(
+    override val position: SourcePosition,
+    val name: String,
+    val value: ASTNode,
+) : ASTNode {
+    override fun toMermaid(): String {
+        val self = "${generateId()}[\"Xml Attribute $name\"]"
+        return "$self-->${value.toMermaid()}\n"
+    }
+}
+
+data class StructLiteralNode(
+    override val position: SourcePosition,
+    val entries: List<StructEntryLiteralNode>,
+) : ASTNode {
+    override fun toMermaid(): String {
+        val self = "${generateId()}[\"Struct\"]"
+        return "$self\n" + entries.joinToString("") { "$self-->${it.toMermaid()}\n" }
+    }
+}
+
+data class StructEntryLiteralNode(
+    override val position: SourcePosition,
+    val key: String,
+    val value: ASTNode,
+) : ASTNode {
+    override fun toMermaid(): String {
+        val self = "${generateId()}[\"Struct Entry $key\"]"
+        return "$self-->${value.toMermaid()}\n"
+    }
+}
+
+data class StructArrayLiteralNode(
+    override val position: SourcePosition,
+    val elements: List<ASTNode>,
+) : ASTNode {
+    override fun toMermaid(): String {
+        val self = "${generateId()}[\"Struct Array\"]"
+        return "$self\n" + elements.joinToString("") { "$self-->${it.toMermaid()}\n" }
+    }
+}
+
 data object NullNode : ASTNode {
     override val position: SourcePosition
         get() = SourcePosition("", 1, 1)

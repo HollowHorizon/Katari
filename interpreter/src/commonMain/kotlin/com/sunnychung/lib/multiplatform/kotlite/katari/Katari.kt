@@ -7,6 +7,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.AssignmentNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ClassMemberReferenceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallArgumentNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
@@ -23,8 +24,17 @@ import com.sunnychung.lib.multiplatform.kotlite.model.ReturnNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
+import com.sunnychung.lib.multiplatform.kotlite.model.STRUCT_ARRAY_VALUE_TYPE_ID
+import com.sunnychung.lib.multiplatform.kotlite.model.STRUCT_VALUE_TYPE_ID
+import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructEntryLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XML_VALUE_TYPE_ID
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
 
 data class KatariNarrativeAnalysis(
     val sourceScript: ScriptNode,
@@ -73,6 +83,7 @@ fun analyzeKatariNarrativeScript(
     val imports = resolveKatariImports(filename, ast, sourceProvider)
     val semanticScript = imports.script.lowerNarrativeStringStatements(imports.scriptNamespaces)
     bindings.executionEnvironment.installKatariTaskSemanticTypes()
+    bindings.executionEnvironment.installKatariDataSemanticTypes()
     val semanticAnalyzer = SemanticAnalyzer(semanticScript, bindings.executionEnvironment)
     semanticAnalyzer.analyze()
     return KatariNarrativeAnalysis(
@@ -84,6 +95,23 @@ fun analyzeKatariNarrativeScript(
         scriptNamespaces = imports.scriptNamespaces,
         enumDefinitions = bindings.enumDefinitions,
     )
+}
+
+private fun ExecutionEnvironment.installKatariDataSemanticTypes() {
+    listOf(XML_VALUE_TYPE_ID, STRUCT_VALUE_TYPE_ID, STRUCT_ARRAY_VALUE_TYPE_ID).forEach { typeId ->
+        if (findProvidedClass(typeId) == null) {
+            registerClass(
+                ProvidedClassDefinition(
+                    fullQualifiedName = typeId,
+                    typeParameters = emptyList(),
+                    isInstanceCreationAllowed = false,
+                    primaryConstructorParameters = emptyList(),
+                    constructInstance = { _, _, _ -> throw UnsupportedOperationException("$typeId is created by literal syntax") },
+                    position = SourcePosition.BUILTIN,
+                )
+            )
+        }
+    }
 }
 
 private fun com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment.installKatariTaskSemanticTypes() {
@@ -161,6 +189,24 @@ private fun ASTNode.lowerNarrativeExpression(scriptNamespaces: Map<String, Set<S
         )
         is LambdaLiteralNode -> copy(
             body = body.lowerNarrativeStringStatements(scriptNamespaces),
+        )
+        is XmlNodeLiteralNode -> copy(
+            attributes = attributes.map {
+                it.copy(value = it.value.lowerNarrativeExpression(scriptNamespaces))
+            },
+            children = children.map { it.lowerNarrativeExpression(scriptNamespaces) },
+        )
+        is XmlAttributeLiteralNode -> copy(
+            value = value.lowerNarrativeExpression(scriptNamespaces),
+        )
+        is StructLiteralNode -> copy(
+            entries = entries.map { it.lowerNarrativeExpression(scriptNamespaces) as StructEntryLiteralNode },
+        )
+        is StructEntryLiteralNode -> copy(
+            value = value.lowerNarrativeExpression(scriptNamespaces),
+        )
+        is StructArrayLiteralNode -> copy(
+            elements = elements.map { it.lowerNarrativeExpression(scriptNamespaces) },
         )
         is PropertyDeclarationNode -> copy(
             initialValue = initialValue?.lowerNarrativeExpression(scriptNamespaces),

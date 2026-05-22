@@ -47,13 +47,18 @@ import com.sunnychung.lib.multiplatform.kotlite.model.StringFieldIdentifierNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
+import com.sunnychung.lib.multiplatform.kotlite.model.TypeNode
 import com.sunnychung.lib.multiplatform.kotlite.model.UnaryOpNode
+import com.sunnychung.lib.multiplatform.kotlite.model.UnitValue
 import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
 import kotlin.math.abs
 
 class KatariCompiler(
@@ -84,6 +89,7 @@ class KatariCompiler(
     private val taskBindings = ArrayDeque<MutableMap<String, Boolean>>()
     private val enumTypeBindings = ArrayDeque<MutableMap<String, String?>>()
     private val frameIdStack = ArrayDeque<Int>()
+    private var xmlBuilderScopeDepth = 0
 
     fun compile(script: ScriptNode): KatariProgram {
         temporarySlotCounter = 0
@@ -100,6 +106,7 @@ class KatariCompiler(
         taskBindings.clear()
         enumTypeBindings.clear()
         frameIdStack.clear()
+        xmlBuilderScopeDepth = 0
 
         collectTopLevelEnums(script)
         collectTopLevelUserFunctions(script)
@@ -206,6 +213,7 @@ class KatariCompiler(
             is NarrativeChooseNode -> compileChoose(statement, instructions)
             is NarrativeAsyncNode -> compileExpression(statement, instructions)
             is NarrativeRaceNode -> compileExpression(statement, instructions)
+            is XmlNodeLiteralNode -> compileXmlStatement(statement, instructions)
             is FunctionDeclarationNode -> throw UnsupportedOperationException(
                 "${statement.position} Local Katari function declarations are not supported. Declare functions at top-level only."
             )
@@ -899,6 +907,10 @@ class KatariCompiler(
             instructions += compileRace(expression, instructions, target)
             return
         }
+        if (expression is XmlNodeLiteralNode) {
+            compileXmlNodeBuilder(expression, target, instructions)
+            return
+        }
         if (expression is FunctionCallNode) {
             val taskControl = compileTaskControlCall(expression, instructions, target)
             if (taskControl != null) {
@@ -1227,7 +1239,7 @@ class KatariCompiler(
                 position = callPosition,
             )
         }
-        if (resultTarget == null) {
+        if (resultTarget == null || declaration.returnsUnit()) {
             validateUserFunctionBodyAsStatements(body, functionName)
             val trailingReturnValue = (body.statements.lastOrNull() as? ReturnNode)?.value
             compileStatementsInScope(
@@ -1246,8 +1258,8 @@ class KatariCompiler(
                 )
             }
             instructions += ExitCallFrameInstruction(
-                returnExpression = null,
-                resultTarget = null,
+                returnExpression = resultTarget?.let { LiteralExpression(UnitValue, position = callPosition) },
+                resultTarget = resultTarget,
                 position = callPosition,
             )
         } else {
@@ -1277,6 +1289,10 @@ class KatariCompiler(
                 position = callPosition,
             )
         }
+    }
+
+    private fun FunctionDeclarationNode.returnsUnit(): Boolean {
+        return declaredReturnType?.let { it.name == "Unit" && it.arguments == null && !it.isNullable } ?: true
     }
 
     private fun validateUserFunctionBodyAsStatements(
@@ -1440,6 +1456,24 @@ class KatariCompiler(
             is StringNode -> compileStringExpression(expression, instructions)
             is StringFieldIdentifierNode -> VariableExpression(resolveVariableName(expression.variableName), position = expression.position)
             is VariableReferenceNode -> VariableExpression(resolveVariableName(expression.variableName), position = expression.position)
+            is XmlNodeLiteralNode -> {
+                val slot = nextTemporarySlot()
+                compileXmlNodeBuilder(expression, ResultTarget.Slot(slot), instructions)
+                SlotExpression(slot, position = expression.position)
+            }
+            is StructLiteralNode -> StructExpression(
+                fields = expression.entries.map { entry ->
+                    StructFieldExpression(
+                        key = entry.key,
+                        value = compileExpression(entry.value, instructions),
+                    )
+                },
+                position = expression.position,
+            )
+            is StructArrayLiteralNode -> StructArrayExpression(
+                elements = expression.elements.map { compileExpression(it, instructions) },
+                position = expression.position,
+            )
             is LambdaLiteralNode -> {
                 val lambdaId = registerLambda(expression)
                 LambdaLiteralExpression(lambdaId = lambdaId, position = expression.position)
@@ -1577,6 +1611,112 @@ class KatariCompiler(
                 )
             }
             else -> throw UnsupportedOperationException("${expression.position} Katari expression `${expression::class.simpleName}` is not supported")
+        }
+    }
+
+    private fun compileXmlStatement(node: XmlNodeLiteralNode, instructions: MutableList<KatariInstruction>) {
+        require(xmlBuilderScopeDepth > 0) {
+            "${node.position} XML literal statement requires an outer XML literal"
+        }
+        compileXmlNodeBuilder(node, null, instructions)
+    }
+
+    private fun compileXmlNodeBuilder(
+        node: XmlNodeLiteralNode,
+        resultTarget: ResultTarget?,
+        instructions: MutableList<KatariInstruction>,
+    ) {
+        instructions += BeginXmlNodeInstruction(
+            name = node.name,
+            attributes = node.attributes.map { attribute ->
+                XmlAttributeExpression(
+                    name = attribute.name,
+                    value = compileExpression(attribute.value, instructions),
+                )
+            },
+            position = node.position,
+        )
+        ++xmlBuilderScopeDepth
+        try {
+            node.children.forEach { compileXmlChildStatement(it, instructions) }
+        } finally {
+            --xmlBuilderScopeDepth
+        }
+        instructions += EndXmlNodeInstruction(resultTarget = resultTarget, position = node.position)
+    }
+
+    private fun compileXmlChildStatement(
+        child: ASTNode,
+        instructions: MutableList<KatariInstruction>,
+    ) {
+        if (child is XmlNodeLiteralNode) {
+            compileXmlStatement(child, instructions)
+            return
+        }
+        if (child.isUnitTypedExpression()) {
+            compileStatement(child, instructions)
+            return
+        }
+        val expression = compileExpressionOrNull(child, instructions)
+        if (expression != null) {
+            instructions += AppendXmlChildrenInstruction(expression = expression, position = child.position)
+        } else {
+            compileStatement(child, instructions)
+        }
+    }
+
+    private fun compileExpressionOrNull(
+        expression: ASTNode,
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression? {
+        return when (expression) {
+            is AssignmentNode,
+            is BlockNode,
+            is BreakNode,
+            is ClassDeclarationNode,
+            is ContinueNode,
+            is ForNode,
+            is FunctionDeclarationNode,
+            is NarrativeCheckpointNode,
+            is NarrativeChooseNode,
+            is NarrativeJumpNode,
+            is ReturnNode,
+            is ScriptNode,
+            is WhileNode -> null
+            else -> compileExpression(expression, instructions)
+        }
+    }
+
+    private fun ASTNode.isUnitTypedExpression(): Boolean {
+        val type = staticTypeOrNull() ?: return false
+        return type.name == "Unit" && type.arguments == null && !type.isNullable
+    }
+
+    private fun ASTNode.staticTypeOrNull(): TypeNode? {
+        return when (this) {
+            is BinaryOpNode -> type
+            is BooleanNode -> TypeNode(SourcePosition.NONE, "Boolean", null, false)
+            is DoubleNode -> TypeNode(SourcePosition.NONE, "Double", null, false)
+            is FunctionCallNode -> returnType
+            is IfNode -> type
+            is IndexOpNode -> type
+            is InfixFunctionCallNode -> type
+            is IntegerNode -> TypeNode(SourcePosition.NONE, "Int", null, false)
+            is StringLiteralNode,
+            is StringNode,
+            is StringFieldIdentifierNode -> TypeNode(SourcePosition.NONE, "String", null, false)
+            is UnaryOpNode -> type
+            is VariableReferenceNode -> type
+            else -> null
+        }
+    }
+
+    private fun BlockNode.trailingReturnTypeOrNull(): TypeNode? {
+        val last = statements.lastOrNull() ?: return TypeNode(SourcePosition.NONE, "Unit", null, false)
+        return when (last) {
+            is ReturnNode -> last.value?.staticTypeOrNull()
+                ?: TypeNode(SourcePosition.NONE, "Unit", null, false)
+            else -> last.staticTypeOrNull()
         }
     }
 
@@ -1754,7 +1894,10 @@ class KatariCompiler(
             position = lambda.position,
             name = id,
             receiver = null,
-            declaredReturnType = null,
+            declaredReturnType = expectedType?.returnType
+                ?: lambda.returnTypeUpperBound
+                ?: lambda.type?.returnType
+                ?: lambda.body.trailingReturnTypeOrNull(),
             valueParameters = valueParameters,
             body = lambda.body,
         )

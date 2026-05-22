@@ -6,8 +6,11 @@ import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
 import com.sunnychung.lib.multiplatform.kotlite.model.ASTNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BinaryOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
+import com.sunnychung.lib.multiplatform.kotlite.model.BooleanNode
+import com.sunnychung.lib.multiplatform.kotlite.model.DoubleNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ElvisOpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionBodyFormat
+import com.sunnychung.lib.multiplatform.kotlite.model.IntegerNode
 import com.sunnychung.lib.multiplatform.kotlite.model.InfixFunctionCallNode
 import com.sunnychung.lib.multiplatform.kotlite.model.KatariImportNode
 import com.sunnychung.lib.multiplatform.kotlite.model.KatariQualifiedImportNode
@@ -19,12 +22,21 @@ import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeAsyncNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeJumpNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceNode
+import com.sunnychung.lib.multiplatform.kotlite.model.LongNode
+import com.sunnychung.lib.multiplatform.kotlite.model.NullNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ScopeType
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
+import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructEntryLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.TokenType
 import com.sunnychung.lib.multiplatform.kotlite.model.UnaryOpNode
+import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
 
 class KatariParser(
     lexer: Lexer,
@@ -68,14 +80,213 @@ class KatariParser(
     }
 
     override fun customPrimaryExpressionOrNull(label: com.sunnychung.lib.multiplatform.kotlite.model.LabelNode?): ASTNode? {
-        if (currentToken.type != TokenType.Identifier) {
-            return null
+        if (isCurrentToken(TokenType.Operator, "<")) {
+            return xmlNodeLiteral()
         }
-        return when (currentToken.value as String) {
-            "async" -> narrativeAsync()
-            "race" -> narrativeRace()
-            else -> null
+        if (currentToken.type == TokenType.StringLiteral) {
+            val token = eat(TokenType.StringLiteral)
+            return StringNode(token.position, listOf(StringLiteralNode(token.position, token.value as String)))
         }
+        if (currentToken.type == TokenType.Identifier) {
+            return when (currentToken.value as String) {
+                "async" -> narrativeAsync()
+                "race" -> narrativeRace()
+                "struct" -> structLiteral()
+                else -> null
+            }
+        }
+        return null
+    }
+
+    private fun xmlNodeLiteral(): XmlNodeLiteralNode {
+        val start = eat(TokenType.Operator, "<")
+        val name = eat(TokenType.Identifier).value as String
+        val attributes = mutableListOf<XmlAttributeLiteralNode>()
+        while (!isCurrentToken(TokenType.Operator, ">") && !isCurrentToken(TokenType.Operator, "/")) {
+            if (currentToken.type == TokenType.NewLine) {
+                repeatedNL()
+                continue
+            }
+            val attrPosition = currentToken.position
+            val attrName = eat(TokenType.Identifier).value as String
+            repeatedNL()
+            eat(TokenType.Symbol, "=")
+            repeatedNL()
+            attributes += XmlAttributeLiteralNode(
+                position = attrPosition,
+                name = attrName,
+                value = xmlAttributeValue(),
+            )
+            repeatedNL()
+        }
+        if (isCurrentToken(TokenType.Operator, "/")) {
+            eat(TokenType.Operator, "/")
+            eat(TokenType.Operator, ">")
+            return XmlNodeLiteralNode(start.position, name, attributes, emptyList())
+        }
+        eat(TokenType.Operator, ">")
+
+        val children = mutableListOf<ASTNode>()
+        while (!isXmlClosingTag(name)) {
+            when {
+                currentToken.type in setOf(TokenType.NewLine, TokenType.Semicolon) -> semis()
+                isCurrentToken(TokenType.Operator, "<") -> children += xmlNodeLiteral()
+                else -> {
+                    children += statement()
+                    if (currentToken.type in setOf(TokenType.NewLine, TokenType.Semicolon)) {
+                        semis()
+                    }
+                }
+            }
+        }
+        eatXmlClosingTag(name)
+        return XmlNodeLiteralNode(start.position, name, attributes, children)
+    }
+
+    private fun xmlAttributeValue(): ASTNode {
+        return when {
+            isCurrentToken(TokenType.Symbol, "\"") || isCurrentToken(TokenType.Symbol, "\"\"\"") -> stringLiteral()
+            currentToken.type == TokenType.StringLiteral -> {
+                val token = eat(TokenType.StringLiteral)
+                StringNode(token.position, listOf(StringLiteralNode(token.position, token.value as String)))
+            }
+            isCurrentToken(TokenType.Symbol, "{") -> bracedXmlExpression()
+            else -> xmlSimpleAttributeExpression()
+        }
+    }
+
+    private fun bracedXmlExpression(): ASTNode {
+        eat(TokenType.Symbol, "{")
+        repeatedNL()
+        val value = expression()
+        repeatedNL()
+        eat(TokenType.Symbol, "}")
+        return value
+    }
+
+    private fun xmlSimpleAttributeExpression(): ASTNode {
+        return when (currentToken.type) {
+            TokenType.Identifier -> {
+                val token = eat(TokenType.Identifier)
+                when (token.value) {
+                    "true" -> BooleanNode(token.position, true)
+                    "false" -> BooleanNode(token.position, false)
+                    "null" -> NullNode
+                    else -> VariableReferenceNode(token.position, token.value as String)
+                }
+            }
+            TokenType.Integer -> {
+                val token = eat(TokenType.Integer)
+                IntegerNode(token.position, token.value as Int)
+            }
+            TokenType.Long -> {
+                val token = eat(TokenType.Long)
+                LongNode(token.position, token.value as Long)
+            }
+            TokenType.Double -> {
+                val token = eat(TokenType.Double)
+                DoubleNode(token.position, token.value as Double)
+            }
+            else -> throw UnexpectedTokenException(currentToken)
+        }
+    }
+
+    private fun isXmlClosingTag(name: String): Boolean {
+        return parseAndRollback {
+            if (!isCurrentToken(TokenType.Operator, "<")) return@parseAndRollback false
+            eat(TokenType.Operator, "<")
+            if (!isCurrentToken(TokenType.Operator, "/")) return@parseAndRollback false
+            eat(TokenType.Operator, "/")
+            if (!isCurrentToken(TokenType.Identifier, name)) return@parseAndRollback false
+            eat(TokenType.Identifier, name)
+            isCurrentToken(TokenType.Operator, ">")
+        }
+    }
+
+    private fun eatXmlClosingTag(name: String) {
+        eat(TokenType.Operator, "<")
+        eat(TokenType.Operator, "/")
+        eat(TokenType.Identifier, name)
+        eat(TokenType.Operator, ">")
+    }
+
+    private fun structLiteral(): StructLiteralNode {
+        val token = eat(TokenType.Identifier, "struct")
+        repeatedNL()
+        return structObjectLiteral(token.position)
+    }
+
+    private fun structObjectLiteral(position: SourcePosition = currentToken.position): StructLiteralNode {
+        eat(TokenType.Symbol, "{")
+        repeatedNL()
+        val entries = mutableListOf<StructEntryLiteralNode>()
+        var hasComma = false
+        while (!isCurrentTokenExcludingNL(TokenType.Symbol, "}")) {
+            if (entries.isNotEmpty() && !hasComma) {
+                throw UnexpectedTokenException(currentToken)
+            }
+            repeatedNL()
+            val keyPosition = currentToken.position
+            val key = structKey()
+            repeatedNL()
+            eat(TokenType.Symbol, ":")
+            repeatedNL()
+            entries += StructEntryLiteralNode(keyPosition, key, structValue())
+            repeatedNL()
+            hasComma = false
+            if (isCurrentToken(TokenType.Symbol, ",")) {
+                eat(TokenType.Symbol, ",")
+                repeatedNL()
+                hasComma = true
+            }
+        }
+        repeatedNL()
+        eat(TokenType.Symbol, "}")
+        return StructLiteralNode(position, entries)
+    }
+
+    private fun structKey(): String {
+        return when (currentToken.type) {
+            TokenType.Identifier -> eat(TokenType.Identifier).value as String
+            TokenType.StringLiteral -> eat(TokenType.StringLiteral).value as String
+            TokenType.Symbol -> {
+                val string = stringLiteral() as? StringNode ?: throw UnexpectedTokenException(currentToken)
+                string.nodes.joinToString("") { (it as StringLiteralNode).content }
+            }
+            else -> throw UnexpectedTokenException(currentToken)
+        }
+    }
+
+    private fun structValue(): ASTNode {
+        return when {
+            isCurrentToken(TokenType.Symbol, "{") -> structObjectLiteral()
+            isCurrentToken(TokenType.Operator, "[") -> structArrayLiteral()
+            else -> expression()
+        }
+    }
+
+    private fun structArrayLiteral(): StructArrayLiteralNode {
+        val token = eat(TokenType.Operator, "[")
+        repeatedNL()
+        val elements = mutableListOf<ASTNode>()
+        var hasComma = false
+        while (!isCurrentTokenExcludingNL(TokenType.Operator, "]")) {
+            if (elements.isNotEmpty() && !hasComma) {
+                throw UnexpectedTokenException(currentToken)
+            }
+            repeatedNL()
+            elements += structValue()
+            repeatedNL()
+            hasComma = false
+            if (isCurrentToken(TokenType.Symbol, ",")) {
+                eat(TokenType.Symbol, ",")
+                repeatedNL()
+                hasComma = true
+            }
+        }
+        repeatedNL()
+        eat(TokenType.Operator, "]")
+        return StructArrayLiteralNode(token.position, elements)
     }
 
     private fun narrativeAsync(): NarrativeAsyncNode {
