@@ -114,7 +114,7 @@ private fun ExecutionEnvironment.installKatariDataSemanticTypes() {
     }
 }
 
-private fun com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment.installKatariTaskSemanticTypes() {
+private fun ExecutionEnvironment.installKatariTaskSemanticTypes() {
     if (findProvidedClass(KATARI_TASK_TYPE_ID) == null) {
         registerClass(
             ProvidedClassDefinition(
@@ -123,7 +123,7 @@ private fun com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment.
                 isInstanceCreationAllowed = false,
                 primaryConstructorParameters = emptyList(),
                 constructInstance = { _, _, _ -> throw UnsupportedOperationException("KatariTask is created by async") },
-                position = com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition.BUILTIN,
+                position = SourcePosition.BUILTIN,
                 functions = listOf(
                     katariTaskSemanticFunction("start", "Unit"),
                     katariTaskSemanticFunction("stop", "Unit"),
@@ -138,7 +138,7 @@ private fun com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment.
 
 private fun katariTaskSemanticFunction(name: String, returnType: String): CustomFunctionDefinition {
     return CustomFunctionDefinition(
-        position = com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition.BUILTIN,
+        position = SourcePosition.BUILTIN,
         receiverType = KATARI_TASK_TYPE_ID,
         functionName = name,
         returnType = returnType,
