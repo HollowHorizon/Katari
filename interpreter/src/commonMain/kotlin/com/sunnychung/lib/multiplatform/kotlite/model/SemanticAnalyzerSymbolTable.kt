@@ -235,21 +235,38 @@ class SemanticAnalyzerSymbolTable(
                             if (arguments.size > callable.arguments.size) return@filter false
                             val argumentsReordered = arrayOfNulls<FunctionCallArgumentInfo>(callable.arguments.size)
                             val typeParameterMapping = mutableMapOf<String, DataType>()
-                            arguments.forEachIndexed { i, arg ->
-                                val newIndex = if (arg.name == null) {
-                                    if (i == arguments.lastIndex && arg.type is FunctionType) {
-                                        callable.arguments.lastIndex
-                                    } else {
-                                        i
-                                    }
+                            val positionalArguments = mutableListOf<FunctionCallArgumentInfo>()
+                            arguments.forEach { arg ->
+                                val name = arg.name
+                                if (name == null) {
+                                    positionalArguments += arg
                                 } else {
-                                    val findIndex = callable.arguments.indexOfFirst { (it as FunctionValueParameterNode).name == arg.name }
-                                    if (findIndex < 0) {
+                                    val index = callable.arguments.indexOfFirst { (it as FunctionValueParameterNode).name == name }
+                                    if (index < 0 || argumentsReordered[index] != null) {
                                         return@filter false
                                     }
-                                    findIndex
+                                    argumentsReordered[index] = arg
                                 }
-                                argumentsReordered[newIndex] = arg
+                            }
+                            positionalArguments.lastOrNull()
+                                ?.takeIf { it.type is FunctionType && argumentsReordered.last() == null }
+                                ?.let { trailingLambda ->
+                                    argumentsReordered[argumentsReordered.lastIndex] = trailingLambda
+                                    positionalArguments.removeAt(positionalArguments.lastIndex)
+                                }
+                            var nextPositionalParameterIndex = 0
+                            positionalArguments.forEach { arg ->
+                                while (
+                                    nextPositionalParameterIndex < argumentsReordered.size &&
+                                    argumentsReordered[nextPositionalParameterIndex] != null
+                                ) {
+                                    nextPositionalParameterIndex++
+                                }
+                                if (nextPositionalParameterIndex >= argumentsReordered.size) {
+                                    return@filter false
+                                }
+                                argumentsReordered[nextPositionalParameterIndex] = arg
+                                nextPositionalParameterIndex++
                             }
                             callable.arguments.foldIndexed(true) { i, acc, it ->
                                 val functionArg = it as FunctionValueParameterNode

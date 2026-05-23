@@ -1817,24 +1817,24 @@ class KatariCompiler(
         parameters: List<FunctionValueParameterNode>,
         instructions: MutableList<KatariInstruction>,
     ): List<KatariExpression> {
-        require(!callArguments.hasPositionalArgumentAfterNamedArgument()) {
-            "$callPosition Positional arguments cannot follow named arguments"
-        }
-        val positionalArguments = callArguments.takeWhile { it.name == null }.toMutableList()
-        val namedArguments = callArguments.drop(positionalArguments.size)
+        val positionalArguments = callArguments.filter { it.name == null }.toMutableList()
         val namedByName = linkedMapOf<String, FunctionCallArgumentNode>()
-        namedArguments.forEach { argument ->
+        callArguments.forEach { argument ->
             val name = argument.name ?: return@forEach
             require(namedByName.put(name, argument) == null) {
                 "${argument.position} Argument `$name` is provided more than once"
             }
         }
-        return parameters.map { parameter ->
-            val argument = if (positionalArguments.isNotEmpty()) {
-                positionalArguments.removeAt(0)
-            } else {
-                namedByName.remove(parameter.name)
-            }
+        val trailingLambda = positionalArguments.lastOrNull()
+            ?.takeIf { it.value is LambdaLiteralNode && parameters.lastOrNull()?.name !in namedByName }
+            ?.also { positionalArguments.removeAt(positionalArguments.lastIndex) }
+        return parameters.mapIndexed { index, parameter ->
+            val argument = namedByName.remove(parameter.name)
+                ?: if (index == parameters.lastIndex && trailingLambda != null) {
+                    trailingLambda
+                } else {
+                    positionalArguments.removeFirstOrNull()
+                }
             when {
                 argument != null -> compileArgumentExpression(argument, parameter, instructions)
                 parameter.defaultValue != null -> compileExpression(parameter.defaultValue, instructions)
