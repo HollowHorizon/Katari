@@ -1,50 +1,9 @@
 package com.sunnychung.lib.multiplatform.kotlite.katari
 
-import com.sunnychung.lib.multiplatform.kotlite.SemanticAnalyzer
 import com.sunnychung.lib.multiplatform.kotlite.Interpreter
+import com.sunnychung.lib.multiplatform.kotlite.SemanticAnalyzer
 import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
-import com.sunnychung.lib.multiplatform.kotlite.model.ASTNode
-import com.sunnychung.lib.multiplatform.kotlite.model.AssignmentNode
-import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
-import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
-import com.sunnychung.lib.multiplatform.kotlite.model.ClassMemberReferenceNode
-import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
-import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
-import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
-import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
-import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionModifier
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallArgumentNode
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
-import com.sunnychung.lib.multiplatform.kotlite.model.IfNode
-import com.sunnychung.lib.multiplatform.kotlite.model.IndexOpNode
-import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
-import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
-import com.sunnychung.lib.multiplatform.kotlite.model.KATARI_TASK_TYPE_ID
-import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
-import com.sunnychung.lib.multiplatform.kotlite.model.ProvidedClassDefinition
-import com.sunnychung.lib.multiplatform.kotlite.model.PropertyDeclarationNode
-import com.sunnychung.lib.multiplatform.kotlite.model.ReturnNode
-import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
-import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
-import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
-import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
-import com.sunnychung.lib.multiplatform.kotlite.model.STRUCT_ARRAY_VALUE_TYPE_ID
-import com.sunnychung.lib.multiplatform.kotlite.model.STRUCT_VALUE_TYPE_ID
-import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
-import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayValue
-import com.sunnychung.lib.multiplatform.kotlite.model.StructEntryLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.StructValue
-import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
-import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
-import com.sunnychung.lib.multiplatform.kotlite.model.XML_VALUE_TYPE_ID
-import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.*
 
 data class KatariNarrativeAnalysis(
     val sourceScript: ScriptNode,
@@ -114,6 +73,18 @@ internal fun ExecutionEnvironment.installKatariDataSemanticTypes() {
     if (findProvidedClass(STRUCT_VALUE_TYPE_ID) == null) {
         registerClass(katariDataSemanticClass(STRUCT_VALUE_TYPE_ID))
         structValueSemanticFunctions().forEach(::registerFunction)
+        registerExtensionProperty(
+            ExtensionProperty(
+                declaredName = "size",
+                receiver = STRUCT_VALUE_TYPE_ID,
+                type = "Int",
+                getter = { interpreter, receiver, _ ->
+                    val struct = receiver as? StructValue
+                        ?: throw IllegalArgumentException("Struct getter `size` requires StructValue receiver")
+                    IntValue(struct.fields.size, interpreter.symbolTable())
+                }
+            )
+        )
     }
     if (findProvidedClass(STRUCT_ARRAY_VALUE_TYPE_ID) == null) {
         registerClass(katariDataSemanticClass(STRUCT_ARRAY_VALUE_TYPE_ID))
@@ -253,47 +224,59 @@ private fun ASTNode.lowerNarrativeExpression(scriptNamespaces: Map<String, Set<S
             subject = subject.lowerNarrativeExpression(scriptNamespaces),
             body = body.lowerNarrativeStringStatements(scriptNamespaces),
         )
+
         is FunctionCallNode -> copy(
             function = function.lowerNamespacedFunctionReference(scriptNamespaces),
             arguments = arguments.map { argument ->
                 argument.copy(value = argument.value.lowerNarrativeExpression(scriptNamespaces))
             },
         )
+
         is FunctionDeclarationNode -> copy(
             body = body?.lowerNarrativeStringStatements(scriptNamespaces),
         )
+
         is IfNode -> copy(
             condition = condition.lowerNarrativeExpression(scriptNamespaces),
             trueBlock = trueBlock?.lowerNarrativeStringStatements(scriptNamespaces),
             falseBlock = falseBlock?.lowerNarrativeStringStatements(scriptNamespaces),
         )
+
         is LambdaLiteralNode -> copy(
             body = body.lowerNarrativeStringStatements(scriptNamespaces),
         )
+
         is XmlNodeLiteralNode -> copy(
             attributes = attributes.map {
                 it.copy(value = it.value.lowerNarrativeExpression(scriptNamespaces))
             },
             children = children.map { it.lowerNarrativeExpression(scriptNamespaces) },
         )
+
         is XmlAttributeLiteralNode -> copy(
             value = value.lowerNarrativeExpression(scriptNamespaces),
         )
+
         is StructLiteralNode -> copy(
             entries = entries.map { it.lowerNarrativeExpression(scriptNamespaces) as StructEntryLiteralNode },
         )
+
         is StructEntryLiteralNode -> copy(
             value = value.lowerNarrativeExpression(scriptNamespaces),
         )
+
         is StructArrayLiteralNode -> copy(
             elements = elements.map { it.lowerNarrativeExpression(scriptNamespaces) },
         )
+
         is PropertyDeclarationNode -> copy(
             initialValue = initialValue?.lowerNarrativeExpression(scriptNamespaces),
         )
+
         is com.sunnychung.lib.multiplatform.kotlite.model.NarrativeAsyncNode -> copy(
             body = body.lowerNarrativeStringStatements(scriptNamespaces),
         )
+
         is com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceNode -> copy(
             entries = entries.map { entry ->
                 entry.copy(
@@ -302,13 +285,16 @@ private fun ASTNode.lowerNarrativeExpression(scriptNamespaces: Map<String, Set<S
                 )
             },
         )
+
         is ReturnNode -> copy(
             value = value?.lowerNarrativeExpression(scriptNamespaces),
         )
+
         is WhileNode -> copy(
             condition = condition.lowerNarrativeExpression(scriptNamespaces),
             body = body?.lowerNarrativeStringStatements(scriptNamespaces),
         )
+
         else -> this
     }
 }
