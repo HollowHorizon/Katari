@@ -310,6 +310,7 @@ class NarrativeBindingsBuilder {
     }
 
     fun build(): KatariBindings {
+        executionEnvironment.installKatariDataSemanticTypes()
         val codecRegistry = KatariValueCodecRegistry(valueCodecs)
         val explicitGlobalNames = globals.keys.toSet()
         val bridgeInterpreter = KotliteInterpreter(
@@ -745,7 +746,7 @@ private class BridgeConstructorCallable(
 }
 
 private fun ExtensionProperty.toKatariDefinitions(
-    interpreter: com.sunnychung.lib.multiplatform.kotlite.Interpreter,
+    interpreter: Interpreter,
 ): List<NarrativeCallable> {
     val receiverTypeStr = receiver
     val valueTypeStr = type

@@ -11,6 +11,7 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.ValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.katari.XmlValueSnapshot
 import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
+import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExtensionProperty
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionResponse
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
@@ -151,6 +152,149 @@ class KatariDataLiteralTest {
     }
 
     @Test
+    fun structLiteralSupportsVariablesAndNavigationExpressions() = runTest {
+        val captures = mutableListOf<RuntimeValue>()
+        val bindings = NarrativeBindings {
+            registerHostType(StructLiteralEntity::class, "Entity")
+            global("entity", StructLiteralEntity(name = "Alex", uuid = "0000-1111"))
+            registerKotliteExtensionProperty(
+                ExtensionProperty(
+                    declaredName = "name",
+                    receiver = "Entity",
+                    type = "String",
+                    getter = { interpreter, receiver, _ ->
+                        StringValue(
+                            ((receiver as NarrativeHostValue).value as StructLiteralEntity).name,
+                            interpreter.symbolTable(),
+                        )
+                    },
+                )
+            )
+            registerKotliteExtensionProperty(
+                ExtensionProperty(
+                    declaredName = "uuid",
+                    receiver = "Entity",
+                    type = "String",
+                    getter = { interpreter, receiver, _ ->
+                        StringValue(
+                            ((receiver as NarrativeHostValue).value as StructLiteralEntity).uuid,
+                            interpreter.symbolTable(),
+                        )
+                    },
+                )
+            )
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(CustomFunctionParameter("value", "Any")),
+            ) { args, _ ->
+                captures += args.single()
+                UnitValue
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val example = struct { x: 10, y: 15, z: 35 }
+                    val data = struct {
+                        npc: {
+                            name: entity.name,
+                            uuid: entity.uuid
+                        },
+                        pos: example
+                    }
+                    capture(data)
+                """.trimIndent(),
+                bindings = bindings,
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        val root = assertIs<StructValue>(captures.single())
+        val npc = assertIs<StructValue>(root.fields.getValue("npc"))
+        val pos = assertIs<StructValue>(root.fields.getValue("pos"))
+
+        assertEquals("Alex", (npc.fields.getValue("name") as StringValue).value)
+        assertEquals("0000-1111", (npc.fields.getValue("uuid") as StringValue).value)
+        assertEquals(10, (pos.fields.getValue("x") as IntValue).value)
+        assertEquals(15, (pos.fields.getValue("y") as IntValue).value)
+        assertEquals(35, (pos.fields.getValue("z") as IntValue).value)
+    }
+
+    @Test
+    fun structValueSupportsIndexOperatorAndTypedGetters() = runTest {
+        val captures = mutableListOf<RuntimeValue>()
+        val bindings = NarrativeBindings {
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(CustomFunctionParameter("value", "Any")),
+            ) { args, _ ->
+                captures += args.single()
+                UnitValue
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val nested = struct { ok: true }
+                    val data = struct {
+                        x: 10,
+                        enabled: true,
+                        ratio: 2.5,
+                        label: "hello",
+                        items: [1, 2],
+                        nested: nested
+                    }
+                    capture(data["x"])
+                    capture(data.getInt("x"))
+                    capture(data.getBoolean("enabled"))
+                    capture(data.getDouble("ratio"))
+                    capture(data.getDouble("x"))
+                    capture(data.getString("label"))
+                    capture(data.getStruct("nested"))
+                    capture(data.getArray("items"))
+                """.trimIndent(),
+                bindings = bindings,
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals(10, assertIs<IntValue>(captures[0]).value)
+        assertEquals(10, assertIs<IntValue>(captures[1]).value)
+        assertEquals(true, assertIs<BooleanValue>(captures[2]).value)
+        assertEquals(2.5, assertIs<DoubleValue>(captures[3]).value)
+        assertEquals(10.0, assertIs<DoubleValue>(captures[4]).value)
+        assertEquals("hello", assertIs<StringValue>(captures[5]).value)
+        assertEquals(true, (assertIs<StructValue>(captures[6]).fields.getValue("ok") as BooleanValue).value)
+        assertEquals(listOf(1, 2), assertIs<StructArrayValue>(captures[7]).elements.map { (it as IntValue).value })
+    }
+
+    @Test
     fun xmlSnapshotPreservesSharedMutableAttributeValues() = runTest {
         val initialCaptures = mutableListOf<String>()
         val initialBindings = valueTypeBindings(
@@ -283,6 +427,11 @@ class KatariDataLiteralTest {
 }
 
 private data class XmlLiteralValue(var value: String)
+
+private data class StructLiteralEntity(
+    val name: String,
+    val uuid: String,
+)
 
 @Serializable
 @SerialName("xml_literal_value")

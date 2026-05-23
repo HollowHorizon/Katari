@@ -1,19 +1,25 @@
 package com.sunnychung.lib.multiplatform.kotlite.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.SemanticAnalyzer
+import com.sunnychung.lib.multiplatform.kotlite.Interpreter
 import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
 import com.sunnychung.lib.multiplatform.kotlite.model.ASTNode
 import com.sunnychung.lib.multiplatform.kotlite.model.AssignmentNode
 import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
+import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ClassMemberReferenceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionDefinition
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
+import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ExecutionEnvironment
 import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
+import com.sunnychung.lib.multiplatform.kotlite.model.FunctionModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallArgumentNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IfNode
 import com.sunnychung.lib.multiplatform.kotlite.model.IndexOpNode
+import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
 import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.KATARI_TASK_TYPE_ID
@@ -21,15 +27,19 @@ import com.sunnychung.lib.multiplatform.kotlite.model.NullValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ProvidedClassDefinition
 import com.sunnychung.lib.multiplatform.kotlite.model.PropertyDeclarationNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ReturnNode
+import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
 import com.sunnychung.lib.multiplatform.kotlite.model.STRUCT_ARRAY_VALUE_TYPE_ID
 import com.sunnychung.lib.multiplatform.kotlite.model.STRUCT_VALUE_TYPE_ID
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
 import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayValue
 import com.sunnychung.lib.multiplatform.kotlite.model.StructEntryLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.StructValue
 import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
 import com.sunnychung.lib.multiplatform.kotlite.model.XML_VALUE_TYPE_ID
@@ -97,21 +107,91 @@ fun analyzeKatariNarrativeScript(
     )
 }
 
-private fun ExecutionEnvironment.installKatariDataSemanticTypes() {
-    listOf(XML_VALUE_TYPE_ID, STRUCT_VALUE_TYPE_ID, STRUCT_ARRAY_VALUE_TYPE_ID).forEach { typeId ->
-        if (findProvidedClass(typeId) == null) {
-            registerClass(
-                ProvidedClassDefinition(
-                    fullQualifiedName = typeId,
-                    typeParameters = emptyList(),
-                    isInstanceCreationAllowed = false,
-                    primaryConstructorParameters = emptyList(),
-                    constructInstance = { _, _, _ -> throw UnsupportedOperationException("$typeId is created by literal syntax") },
-                    position = SourcePosition.BUILTIN,
-                )
-            )
-        }
+internal fun ExecutionEnvironment.installKatariDataSemanticTypes() {
+    if (findProvidedClass(XML_VALUE_TYPE_ID) == null) {
+        registerClass(katariDataSemanticClass(XML_VALUE_TYPE_ID))
     }
+    if (findProvidedClass(STRUCT_VALUE_TYPE_ID) == null) {
+        registerClass(katariDataSemanticClass(STRUCT_VALUE_TYPE_ID))
+        structValueSemanticFunctions().forEach(::registerFunction)
+    }
+    if (findProvidedClass(STRUCT_ARRAY_VALUE_TYPE_ID) == null) {
+        registerClass(katariDataSemanticClass(STRUCT_ARRAY_VALUE_TYPE_ID))
+    }
+}
+
+private fun katariDataSemanticClass(typeId: String): ProvidedClassDefinition {
+    return ProvidedClassDefinition(
+        fullQualifiedName = typeId,
+        typeParameters = emptyList(),
+        isInstanceCreationAllowed = false,
+        primaryConstructorParameters = emptyList(),
+        constructInstance = { _, _, _ -> throw UnsupportedOperationException("$typeId is created by literal syntax") },
+        position = SourcePosition.BUILTIN,
+    )
+}
+
+private fun structValueSemanticFunctions(): List<CustomFunctionDefinition> {
+    return listOf(
+        structValueGetter("get", "Any", setOf(FunctionModifier.operator)) { _, struct, key ->
+            struct.requireField(key)
+        },
+        structValueGetter("getInt", "Int") { _, struct, key ->
+            struct.requireField<IntValue>(key, "Int")
+        },
+        structValueGetter("getBoolean", "Boolean") { _, struct, key ->
+            struct.requireField<BooleanValue>(key, "Boolean")
+        },
+        structValueGetter("getDouble", "Double") { interpreter, struct, key ->
+            when (val value = struct.requireField(key)) {
+                is DoubleValue -> value
+                is IntValue -> DoubleValue(value.value.toDouble(), interpreter.symbolTable())
+                else -> throw IllegalArgumentException("Struct field `$key` has type `${value.type().descriptiveName}`, expected `Double`")
+            }
+        },
+        structValueGetter("getString", "String") { _, struct, key ->
+            struct.requireField<StringValue>(key, "String")
+        },
+        structValueGetter("getStruct", STRUCT_VALUE_TYPE_ID) { _, struct, key ->
+            struct.requireField<StructValue>(key, STRUCT_VALUE_TYPE_ID)
+        },
+        structValueGetter("getArray", STRUCT_ARRAY_VALUE_TYPE_ID) { _, struct, key ->
+            struct.requireField<StructArrayValue>(key, STRUCT_ARRAY_VALUE_TYPE_ID)
+        },
+    )
+}
+
+private fun structValueGetter(
+    name: String,
+    returnType: String,
+    modifiers: Set<FunctionModifier> = emptySet(),
+    getter: (interpreter: Interpreter, struct: StructValue, key: String) -> RuntimeValue,
+): CustomFunctionDefinition {
+    return CustomFunctionDefinition(
+        position = SourcePosition.BUILTIN,
+        receiverType = STRUCT_VALUE_TYPE_ID,
+        functionName = name,
+        returnType = returnType,
+        parameterTypes = listOf(CustomFunctionParameter("key", "String")),
+        modifiers = modifiers,
+        executable = { interpreter, receiver, args, _ ->
+            val struct = receiver as? StructValue
+                ?: throw IllegalArgumentException("Struct getter `$name` requires StructValue receiver")
+            val key = (args.singleOrNull() as? StringValue)?.value
+                ?: throw IllegalArgumentException("Struct getter `$name` requires a String key")
+            getter(interpreter, struct, key)
+        },
+    )
+}
+
+private fun StructValue.requireField(key: String): RuntimeValue {
+    return fields[key] ?: throw NoSuchElementException("Struct has no field `$key`")
+}
+
+private inline fun <reified T : RuntimeValue> StructValue.requireField(key: String, expectedType: String): T {
+    val value = requireField(key)
+    return value as? T
+        ?: throw IllegalArgumentException("Struct field `$key` has type `${value.type().descriptiveName}`, expected `$expectedType`")
 }
 
 private fun ExecutionEnvironment.installKatariTaskSemanticTypes() {
