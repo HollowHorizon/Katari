@@ -4,6 +4,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.DefaultArgumentMarker
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeEnumValue
 import com.sunnychung.lib.multiplatform.kotlite.model.RuntimeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
+import com.sunnychung.lib.multiplatform.kotlite.model.TypeNode
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlValue
 import kotlinx.serialization.KSerializer
@@ -29,6 +30,7 @@ data class CallFunctionInstruction(
     val functionId: String,
     val arguments: List<KatariExpression>,
     val argumentNames: List<String?> = emptyList(),
+    val typeArguments: List<TypeNode> = emptyList(),
     val resultTarget: ResultTarget? = null,
     override val position: SourcePosition? = null,
 ) : KatariInstruction
@@ -211,6 +213,13 @@ data class BinaryExpression(
     val left: KatariExpression,
     val operator: BinaryOperator,
     val right: KatariExpression,
+    override val position: SourcePosition? = null,
+) : KatariExpression
+
+data class TypeCheckExpression(
+    val subject: KatariExpression,
+    val type: TypeNode,
+    val isNegated: Boolean,
     override val position: SourcePosition? = null,
 ) : KatariExpression
 

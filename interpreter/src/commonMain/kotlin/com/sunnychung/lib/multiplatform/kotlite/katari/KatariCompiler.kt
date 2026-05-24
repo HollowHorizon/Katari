@@ -57,6 +57,9 @@ import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterModifier
+import com.sunnychung.lib.multiplatform.kotlite.model.WhenConditionNode
+import com.sunnychung.lib.multiplatform.kotlite.model.WhenEntryNode
+import com.sunnychung.lib.multiplatform.kotlite.model.WhenNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
 import kotlin.math.abs
@@ -88,6 +91,7 @@ class KatariCompiler(
     private val lambdaBindings = ArrayDeque<MutableMap<String, String?>>()
     private val taskBindings = ArrayDeque<MutableMap<String, Boolean>>()
     private val enumTypeBindings = ArrayDeque<MutableMap<String, String?>>()
+    private val typeArgumentBindings = ArrayDeque<Map<String, TypeNode>>()
     private val frameIdStack = ArrayDeque<Int>()
     private var xmlBuilderScopeDepth = 0
 
@@ -105,6 +109,7 @@ class KatariCompiler(
         lambdaBindings.clear()
         taskBindings.clear()
         enumTypeBindings.clear()
+        typeArgumentBindings.clear()
         frameIdStack.clear()
         xmlBuilderScopeDepth = 0
 
@@ -202,6 +207,7 @@ class KatariCompiler(
             is ScriptNode -> compileStatementsInScope(statement.nodes, instructions)
             is BlockNode -> compileStatementsInScope(statement.statements, instructions)
             is IfNode -> compileIf(statement, instructions)
+            is WhenNode -> compileWhen(statement, null, instructions)
             is WhileNode -> compileWhile(statement, instructions)
             is ForNode -> compileFor(statement, instructions)
             is PropertyDeclarationNode -> compilePropertyDeclaration(statement, instructions)
@@ -726,6 +732,7 @@ class KatariCompiler(
                     resultTarget = ResultTarget.Variable(targetName, declaresLocal = true),
                     receiverExpression = invocation.receiverExpression,
                     closureExpression = invocation.closureExpression,
+                    typeBindings = invocation.typeArgumentBindings,
                 )
             } else {
                 instructions += compileCall(
@@ -780,6 +787,7 @@ class KatariCompiler(
                                     resultTarget = ResultTarget.Variable(targetName),
                                     receiverExpression = invocation.receiverExpression,
                                     closureExpression = invocation.closureExpression,
+                                    typeBindings = invocation.typeArgumentBindings,
                                 )
                             } else {
                                 instructions += compileCall(
@@ -880,6 +888,143 @@ class KatariCompiler(
         return SlotExpression(slot)
     }
 
+    private fun compileWhenExpression(node: WhenNode, instructions: MutableList<KatariInstruction>): KatariExpression {
+        val slot = nextTemporarySlot()
+        compileWhen(node, ResultTarget.Slot(slot), instructions)
+        return SlotExpression(slot, position = node.position)
+    }
+
+    private fun compileWhen(
+        node: WhenNode,
+        target: ResultTarget?,
+        instructions: MutableList<KatariInstruction>,
+    ) {
+        require(node.entries.isNotEmpty()) {
+            "${node.position} Katari when expression cannot be empty"
+        }
+        val subjectVariable = node.subject?.let { subject ->
+            val name = subject.valueName ?: "__narrative_when_subject_${nextTemporarySlot()}"
+            instructions += SetVariableInstruction(
+                name = name,
+                expression = compileExpression(subject.value, instructions),
+                declaresLocal = true,
+                position = subject.position,
+            )
+            name
+        }
+
+        val endJumpIndices = mutableListOf<Int>()
+        node.entries.forEach { entry ->
+            val condition = compileWhenEntryCondition(entry, subjectVariable, instructions)
+            val conditionalIndex = condition?.let {
+                instructions += ConditionalJumpInstruction(
+                    condition = it,
+                    falseTarget = -1,
+                    position = entry.position,
+                )
+                instructions.lastIndex
+            }
+
+            if (target != null) {
+                compileBranchExpression(entry.body, target, instructions)
+            } else {
+                compileStatement(entry.body, instructions)
+            }
+
+            endJumpIndices += instructions.size
+            instructions += JumpInstruction(target = -1, position = entry.position)
+
+            conditionalIndex?.let {
+                instructions[it] = ConditionalJumpInstruction(
+                    condition = condition!!,
+                    falseTarget = instructions.size,
+                    position = entry.position,
+                )
+            }
+        }
+
+        val endTarget = instructions.size
+        endJumpIndices.forEach { jumpIndex ->
+            instructions[jumpIndex] = JumpInstruction(
+                target = endTarget,
+                position = instructions[jumpIndex].position,
+            )
+        }
+    }
+
+    private fun compileWhenEntryCondition(
+        entry: WhenEntryNode,
+        subjectVariable: String?,
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression? {
+        if (entry.conditions.isEmpty()) return null
+        return entry.conditions
+            .map { compileWhenCondition(it, subjectVariable, instructions) }
+            .reduce { left, right ->
+                BinaryExpression(
+                    left = left,
+                    operator = BinaryOperator.Or,
+                    right = right,
+                    position = entry.position,
+                )
+            }
+    }
+
+    private fun compileWhenCondition(
+        condition: WhenConditionNode,
+        subjectVariable: String?,
+        instructions: MutableList<KatariInstruction>,
+    ): KatariExpression {
+        val subjectExpression = subjectVariable?.let { VariableExpression(it, position = condition.position) }
+        val expression = when (condition.testType) {
+            WhenConditionNode.TestType.Regular -> {
+                if (subjectExpression == null) {
+                    compileExpression(condition.expression, instructions)
+                } else {
+                    BinaryExpression(
+                        left = subjectExpression,
+                        operator = BinaryOperator.Equals,
+                        right = compileExpression(condition.expression, instructions),
+                        position = condition.position,
+                    )
+                }
+            }
+            WhenConditionNode.TestType.RangeTest -> {
+                condition.call?.let { compileExpression(it, instructions) }
+                    ?: compileExternalExpressionCall(
+                        functionId = "contains",
+                        arguments = listOf(
+                            compileExpression(condition.expression, instructions),
+                            subjectExpression ?: throw UnsupportedOperationException(
+                                "${condition.position} Katari range when-condition requires a subject"
+                            ),
+                        ),
+                        position = condition.position,
+                        instructions = instructions,
+                    )
+            }
+            WhenConditionNode.TestType.TypeTest -> {
+                val type = condition.expression as? TypeNode
+                    ?: throw UnsupportedOperationException("${condition.position} Katari type when-condition requires a type")
+                TypeCheckExpression(
+                    subject = subjectExpression ?: throw UnsupportedOperationException(
+                        "${condition.position} Katari type when-condition requires a subject"
+                    ),
+                    type = type,
+                    isNegated = false,
+                    position = condition.position,
+                )
+            }
+        }
+        return if (condition.isNegateResult && condition.testType != WhenConditionNode.TestType.TypeTest) {
+            UnaryExpression(UnaryOperator.Not, expression, condition.position)
+        } else if (condition.isNegateResult && expression is TypeCheckExpression) {
+            expression.copy(isNegated = true)
+        } else {
+            expression
+        }
+    }
+
     private fun compileBranchExpression(
         block: BlockNode?,
         target: ResultTarget,
@@ -927,6 +1072,7 @@ class KatariCompiler(
                     resultTarget = target,
                     receiverExpression = invocation.receiverExpression,
                     closureExpression = invocation.closureExpression,
+                    typeBindings = invocation.typeArgumentBindings,
                 )
             } else {
                 instructions += compileCall(
@@ -1131,6 +1277,7 @@ class KatariCompiler(
                 functionId = resolveCallableName(function.variableName),
                 arguments = arguments,
                 argumentNames = argumentNames,
+                typeArguments = node.typeArguments.map(::resolveTypeArgument),
                 resultTarget = resultTarget,
                 position = node.position,
             )
@@ -1139,12 +1286,35 @@ class KatariCompiler(
                     functionId = resolveNavigationCallableName(function) ?: resolveCallableName(function.member.name),
                     arguments = listOf(compileExpression(function.subject, instructions)) + arguments,
                     argumentNames = listOf(null) + argumentNames,
+                    typeArguments = node.typeArguments.map(::resolveTypeArgument),
                     resultTarget = resultTarget,
                     position = node.position,
                 )
             }
             else -> throw UnsupportedOperationException("Katari call `${function::class.simpleName}` is not supported")
         }
+    }
+
+    private fun resolveTypeArgument(type: TypeNode): TypeNode {
+        val replacement = typeArgumentBindings
+            .asReversed()
+            .firstNotNullOfOrNull { bindings -> bindings[type.name] }
+        if (replacement != null && type.arguments.isNullOrEmpty()) {
+            return TypeNode(
+                position = type.position,
+                name = replacement.name,
+                arguments = replacement.arguments,
+                isNullable = type.isNullable || replacement.isNullable,
+                transformedRefName = replacement.transformedRefName,
+            )
+        }
+        return TypeNode(
+            position = type.position,
+            name = type.name,
+            arguments = type.arguments?.map(::resolveTypeArgument),
+            isNullable = type.isNullable,
+            transformedRefName = type.transformedRefName,
+        )
     }
 
     private fun compileTaskControlCall(
@@ -1198,6 +1368,7 @@ class KatariCompiler(
         resultTarget: ResultTarget?,
         receiverExpression: KatariExpression? = null,
         closureExpression: KatariExpression? = null,
+        typeBindings: Map<String, TypeNode> = emptyMap(),
     ) {
         val functionName = declaration.name
         require(argumentExpressions.size == declaration.valueParameters.size) {
@@ -1211,6 +1382,7 @@ class KatariCompiler(
             }
         }
 
+        withTypeArgumentBindings(typeBindings) {
         val body = declaration.body
             ?: throw UnsupportedOperationException("${declaration.position} Katari user function `${functionName}` must have a body")
 
@@ -1289,6 +1461,20 @@ class KatariCompiler(
                 position = callPosition,
             )
         }
+        }
+    }
+
+    private inline fun withTypeArgumentBindings(bindings: Map<String, TypeNode>, block: () -> Unit) {
+        if (bindings.isEmpty()) {
+            block()
+            return
+        }
+        typeArgumentBindings.addLast(bindings)
+        try {
+            block()
+        } finally {
+            typeArgumentBindings.removeLast()
+        }
     }
 
     private fun FunctionDeclarationNode.returnsUnit(): Boolean {
@@ -1349,6 +1535,13 @@ class KatariCompiler(
         }
     }
 
+    private fun compileKatariNamespaceProperty(node: NavigationNode): KatariExpression? {
+        val namespace = (node.subject as? VariableReferenceNode)?.variableName ?: return null
+        val members = scriptNamespaces[namespace] ?: return null
+        if (node.member.name !in members) return null
+        return VariableExpression("$namespace.${node.member.name}", position = node.position)
+    }
+
     private fun withExpressionBindings(
         shadowedNames: Set<String>,
         lambdaParameterBindings: Map<String, String>,
@@ -1380,6 +1573,7 @@ class KatariCompiler(
             resultTarget = null,
             receiverExpression = invocation.receiverExpression,
             closureExpression = invocation.closureExpression,
+            typeBindings = invocation.typeArgumentBindings,
         )
         return true
     }
@@ -1479,6 +1673,7 @@ class KatariCompiler(
                 LambdaLiteralExpression(lambdaId = lambdaId, position = expression.position)
             }
             is IfNode -> compileIfExpression(expression, instructions)
+            is WhenNode -> compileWhenExpression(expression, instructions)
             is FunctionCallNode -> {
                 val taskControl = compileTaskControlCall(expression, instructions, ResultTarget.Slot(nextTemporarySlot()))
                 if (taskControl != null) {
@@ -1499,6 +1694,7 @@ class KatariCompiler(
                         resultTarget = ResultTarget.Slot(slot),
                         receiverExpression = invocation.receiverExpression,
                         closureExpression = invocation.closureExpression,
+                        typeBindings = invocation.typeArgumentBindings,
                     )
                     return SlotExpression(slot, position = expression.position)
                 }
@@ -1522,6 +1718,7 @@ class KatariCompiler(
             }
             is NavigationNode -> compileEnumNavigationExpression(expression)
                 ?: compileEnumValuePropertyExpression(expression, instructions)
+                ?: compileKatariNamespaceProperty(expression)
                 ?: compileExternalExpressionCall(
                     functionId = expression.member.name,
                     arguments = listOf(compileExpression(expression.subject, instructions)),
@@ -1707,6 +1904,7 @@ class KatariCompiler(
             is StringFieldIdentifierNode -> TypeNode(SourcePosition.NONE, "String", null, false)
             is UnaryOpNode -> type
             is VariableReferenceNode -> type
+            is WhenNode -> type
             else -> null
         }
     }
@@ -2019,6 +2217,7 @@ class KatariCompiler(
                 ResolvedUserFunctionInvocation(
                     declaration = declaration,
                     receiverExpression = null,
+                    typeArgumentBindings = declaration.callTypeArgumentBindings(node),
                     argumentExpressions = compileCallArguments(
                         callPosition = node.position,
                         callArguments = node.arguments,
@@ -2038,6 +2237,7 @@ class KatariCompiler(
                 ResolvedUserFunctionInvocation(
                     declaration = declaration,
                     receiverExpression = compileExpression(function.subject, instructions),
+                    typeArgumentBindings = declaration.callTypeArgumentBindings(node),
                     argumentExpressions = compileCallArguments(
                         callPosition = node.position,
                         callArguments = node.arguments,
@@ -2060,6 +2260,13 @@ class KatariCompiler(
         return runCatching {
             matchCallArgumentShape(arguments, declaration.valueParameters)
         }.getOrDefault(false)
+    }
+
+    private fun FunctionDeclarationNode.callTypeArgumentBindings(node: FunctionCallNode): Map<String, TypeNode> {
+        if (typeParameters.isEmpty() || node.typeArguments.isEmpty()) return emptyMap()
+        return typeParameters
+            .zip(node.typeArguments)
+            .associate { (parameter, argument) -> parameter.name to resolveTypeArgument(argument) }
     }
 
     private fun compileStringExpression(
@@ -2175,6 +2382,7 @@ private data class ResolvedUserFunctionInvocation(
     val receiverExpression: KatariExpression?,
     val argumentExpressions: List<KatariExpression>,
     val closureExpression: KatariExpression? = null,
+    val typeArgumentBindings: Map<String, TypeNode> = emptyMap(),
 )
 
 private fun FunctionDeclarationNode.isNarrativeVararg(): Boolean {

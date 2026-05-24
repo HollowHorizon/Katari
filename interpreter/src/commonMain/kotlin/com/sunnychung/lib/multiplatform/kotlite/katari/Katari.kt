@@ -12,6 +12,7 @@ data class KatariNarrativeAnalysis(
     val semanticAnalyzer: SemanticAnalyzer,
     val nameAliases: Map<String, String> = emptyMap(),
     val scriptNamespaces: Map<String, Set<String>> = emptyMap(),
+    val preprocessorInstructions: Map<String, List<KatariPreprocessorInstruction>> = emptyMap(),
     val enumDefinitions: Map<String, KatariEnumDefinition> = emptyMap(),
     val program: KatariProgram? = null,
 )
@@ -48,8 +49,9 @@ fun analyzeKatariNarrativeScript(
     bindings: KatariBindings = NarrativeBindings { registerBuiltinFunctions(NarrativeNoOpHost) },
     sourceProvider: KatariSourceProvider = EmptyKatariSourceProvider,
 ): KatariNarrativeAnalysis {
-    val ast = KatariParser(Lexer(filename = filename, code = code, isParseSingleQuotedString = true)).narrativeScript()
-    val imports = resolveKatariImports(filename, ast, sourceProvider)
+    val preprocessed = preprocessKatariSource(filename, code)
+    val ast = KatariParser(Lexer(filename = filename, code = preprocessed.code, isParseSingleQuotedString = true)).narrativeScript()
+    val imports = resolveKatariImports(filename, ast, sourceProvider, preprocessed.instructions)
     val semanticScript = imports.script.lowerNarrativeStringStatements(imports.scriptNamespaces)
     bindings.executionEnvironment.installKatariTaskSemanticTypes()
     bindings.executionEnvironment.installKatariDataSemanticTypes()
@@ -62,6 +64,7 @@ fun analyzeKatariNarrativeScript(
         semanticAnalyzer = semanticAnalyzer,
         nameAliases = imports.nameAliases,
         scriptNamespaces = imports.scriptNamespaces,
+        preprocessorInstructions = imports.preprocessorInstructions,
         enumDefinitions = bindings.enumDefinitions,
     )
 }
@@ -226,11 +229,16 @@ private fun ASTNode.lowerNarrativeExpression(scriptNamespaces: Map<String, Set<S
         )
 
         is FunctionCallNode -> copy(
-            function = function.lowerNamespacedFunctionReference(scriptNamespaces),
+            function = function.lowerNarrativeExpression(scriptNamespaces)
+                .lowerNamespacedFunctionReference(scriptNamespaces),
             arguments = arguments.map { argument ->
                 argument.copy(value = argument.value.lowerNarrativeExpression(scriptNamespaces))
             },
         )
+
+        is NavigationNode -> copy(
+            subject = subject.lowerNarrativeExpression(scriptNamespaces),
+        ).lowerNamespacedMemberReference(scriptNamespaces)
 
         is FunctionDeclarationNode -> copy(
             body = body?.lowerNarrativeStringStatements(scriptNamespaces),
@@ -240,6 +248,18 @@ private fun ASTNode.lowerNarrativeExpression(scriptNamespaces: Map<String, Set<S
             condition = condition.lowerNarrativeExpression(scriptNamespaces),
             trueBlock = trueBlock?.lowerNarrativeStringStatements(scriptNamespaces),
             falseBlock = falseBlock?.lowerNarrativeStringStatements(scriptNamespaces),
+        )
+
+        is WhenNode -> copy(
+            subject = subject?.copy(value = subject.value.lowerNarrativeExpression(scriptNamespaces)),
+            entries = entries.map { entry ->
+                entry.copy(
+                    conditions = entry.conditions.map { condition ->
+                        condition.copy(expression = condition.expression.lowerNarrativeExpression(scriptNamespaces))
+                    },
+                    body = entry.body.lowerNarrativeStringStatements(scriptNamespaces),
+                )
+            },
         )
 
         is LambdaLiteralNode -> copy(
@@ -273,11 +293,11 @@ private fun ASTNode.lowerNarrativeExpression(scriptNamespaces: Map<String, Set<S
             initialValue = initialValue?.lowerNarrativeExpression(scriptNamespaces),
         )
 
-        is com.sunnychung.lib.multiplatform.kotlite.model.NarrativeAsyncNode -> copy(
+        is NarrativeAsyncNode -> copy(
             body = body.lowerNarrativeStringStatements(scriptNamespaces),
         )
 
-        is com.sunnychung.lib.multiplatform.kotlite.model.NarrativeRaceNode -> copy(
+        is NarrativeRaceNode -> copy(
             entries = entries.map { entry ->
                 entry.copy(
                     action = entry.action.lowerNarrativeExpression(scriptNamespaces),
@@ -331,6 +351,13 @@ private fun AssignmentNode.lowerNarrativeAssignment(scriptNamespaces: Map<String
 }
 
 private fun ASTNode.lowerNamespacedFunctionReference(scriptNamespaces: Map<String, Set<String>>): ASTNode {
+    val navigation = this as? NavigationNode ?: return this
+    val namespace = navigation.subject as? VariableReferenceNode ?: return this
+    if (navigation.member.name !in scriptNamespaces[namespace.variableName].orEmpty()) return this
+    return VariableReferenceNode(navigation.position, "${namespace.variableName}.${navigation.member.name}")
+}
+
+private fun ASTNode.lowerNamespacedMemberReference(scriptNamespaces: Map<String, Set<String>>): ASTNode {
     val navigation = this as? NavigationNode ?: return this
     val namespace = navigation.subject as? VariableReferenceNode ?: return this
     if (navigation.member.name !in scriptNamespaces[namespace.variableName].orEmpty()) return this

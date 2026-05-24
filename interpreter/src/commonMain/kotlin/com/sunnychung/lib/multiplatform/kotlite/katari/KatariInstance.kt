@@ -2,6 +2,7 @@ package com.sunnychung.lib.multiplatform.kotlite.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.model.BooleanValue
 import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
+import com.sunnychung.lib.multiplatform.kotlite.model.DataType
 import com.sunnychung.lib.multiplatform.kotlite.model.DefaultArgumentMarker
 import com.sunnychung.lib.multiplatform.kotlite.model.DoubleValue
 import com.sunnychung.lib.multiplatform.kotlite.model.EnumEntriesIteratorValue
@@ -289,7 +290,10 @@ class KatariInstance(
         val referencedSlots = collectReferencedSlots(instruction.arguments)
         val definition = resolved.callable
         val arguments = resolved.arguments
-        return when (val result = definition.startCall(arguments, KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task))) {
+        return when (val result = definition.startCall(
+            arguments,
+            KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task, resolved.typeArguments),
+        )) {
             is NarrativeCallResult.Returned -> {
                 currentState = currentState.updateTask(
                     index = taskIndex,
@@ -331,7 +335,10 @@ class KatariInstance(
         }
         val args = instruction.arguments.map { evaluateExpression(currentState, task, it) }
         val (callable, normalizedArgs) = executionEnvironment.resolveNarrativeCallable(functionId, args, argumentNames)
-        return ResolvedCall(callable = callable, arguments = normalizedArgs)
+        val typeArguments = callable.typeParameters
+            .zip(instruction.typeArguments)
+            .associate { (parameter, type) -> parameter.name to snapshotCodec.symbolTable().assertToDataType(type) }
+        return ResolvedCall(callable = callable, arguments = normalizedArgs, typeArguments = typeArguments)
     }
 
     private suspend fun dispatchSuspendedCall(request: FunctionDispatchRequest) {
@@ -347,7 +354,7 @@ class KatariInstance(
                 taskId = task.id,
                 arguments = resolved.arguments,
                 definition = resolved.callable,
-                context = KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task),
+                context = KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task, resolved.typeArguments),
             )
         }
 
@@ -401,7 +408,7 @@ class KatariInstance(
                 when (val result = definition.resumeCall(
                     arguments = arguments,
                     response = response,
-                    context = KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task),
+                    context = KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task, resolved.typeArguments),
                 )) {
                     is NarrativeCallResult.Returned -> {
                         val resumedTask = cleanupSlots(
@@ -1017,6 +1024,12 @@ class KatariInstance(
                         BinaryOperator.Or -> BooleanValue(left.asBoolean() || evaluateExpression(state, task, expression.right).asBoolean(), snapshotCodec.symbolTable())
                     }
                 }
+                is TypeCheckExpression -> {
+                    val value = evaluateExpression(state, task, expression.subject)
+                    val type = snapshotCodec.symbolTable().assertToDataType(expression.type)
+                    val result = type.isAssignableFrom(value.type())
+                    BooleanValue(if (expression.isNegated) !result else result, snapshotCodec.symbolTable())
+                }
             }
         } catch (e: Throwable) {
             if (e is CancellationException) {
@@ -1229,6 +1242,7 @@ class KatariInstance(
             is StructArrayExpression -> expression.elements.flatMapTo(linkedSetOf()) { collectReferencedSlots(it) }
             is UnaryExpression -> collectReferencedSlots(expression.operand)
             is BinaryExpression -> collectReferencedSlots(expression.left) + collectReferencedSlots(expression.right)
+            is TypeCheckExpression -> collectReferencedSlots(expression.subject)
         }
     }
 
@@ -1448,12 +1462,14 @@ private data class DispatchData(
 private data class ResolvedCall(
     val callable: NarrativeCallable,
     val arguments: List<RuntimeValue>,
+    val typeArguments: Map<String, DataType>,
 )
 
 private class KatariCallContextImpl(
     override val symbolTable: SymbolTable,
     override val state: Any,
     override val task: Any,
+    override val typeArguments: Map<String, DataType>,
 ) : NarrativeCallContext, NarrativeCallDispatchContext
 
 private class KatariExpressionEvaluationException(

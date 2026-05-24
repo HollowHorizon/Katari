@@ -152,6 +152,48 @@ class KatariDataLiteralTest {
     }
 
     @Test
+    fun xmlAndStructLiteralsCanBeParenthesized() = runTest {
+        val captures = mutableListOf<RuntimeValue>()
+        val bindings = NarrativeBindings {
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(CustomFunctionParameter("value", "Any")),
+            ) { args, _ ->
+                captures += args.single()
+                UnitValue
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    val xml = (<tag />)
+                    val data = (struct { x: 1 })
+                    capture(xml)
+                    capture(data)
+                """.trimIndent(),
+                bindings = bindings,
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
+        assertEquals("tag", assertIs<XmlValue>(captures[0]).name)
+        assertEquals(1, (assertIs<StructValue>(captures[1]).fields.getValue("x") as IntValue).value)
+    }
+
+    @Test
     fun structLiteralSupportsVariablesAndNavigationExpressions() = runTest {
         val captures = mutableListOf<RuntimeValue>()
         val bindings = NarrativeBindings {

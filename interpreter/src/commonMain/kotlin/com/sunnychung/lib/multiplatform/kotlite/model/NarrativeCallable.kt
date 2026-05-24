@@ -62,6 +62,8 @@ interface NarrativeCallContext {
     val symbolTable: SymbolTable
     val state: Any
     val task: Any
+    val typeArguments: Map<String, DataType>
+        get() = emptyMap()
 }
 
 interface NarrativeCallDispatchContext : NarrativeCallContext

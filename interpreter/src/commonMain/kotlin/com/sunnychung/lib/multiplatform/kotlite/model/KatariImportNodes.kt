@@ -15,7 +15,6 @@ data class KatariScriptImportNode(
     override val position: SourcePosition,
     val path: String,
     val alias: String? = null,
-    val isLoad: Boolean = false,
 ) : KatariImportNode {
     override fun toMermaid(): String = ""
 }

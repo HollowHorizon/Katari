@@ -12,7 +12,10 @@ import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeBuiltinFunctions
 import com.sunnychung.lib.multiplatform.kotlite.katari.NarrativeHost
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskState
 import com.sunnychung.lib.multiplatform.kotlite.katari.TaskStatus
+import com.sunnychung.lib.multiplatform.kotlite.katari.analyzeKatariNarrativeScript
+import com.sunnychung.lib.multiplatform.kotlite.model.CustomFunctionParameter
 import com.sunnychung.lib.multiplatform.kotlite.model.IntValue
+import com.sunnychung.lib.multiplatform.kotlite.model.UnitValue
 import com.sunnychung.lib.multiplatform.kotlite.katari.StateSnapshotCodec
 import com.sunnychung.lib.multiplatform.kotlite.stdlib.AllStdLibModules
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -29,7 +32,7 @@ class KatariImportsTest {
     private fun symbolTable() = StateSnapshotCodec().symbolTable()
 
     @Test
-    fun importKatariScriptAddsOnlyFunctions() = runTest {
+    fun importKatariScriptExecutesImportedTopLevelBeforeMain() = runTest {
         val events = mutableListOf<String>()
         val program = KatariNarrativeProgram(
             filename = "main.ktr",
@@ -57,23 +60,23 @@ class KatariImportsTest {
         instance.join()
 
         assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
-        assertEquals(listOf("Hello, Main"), events)
+        assertEquals(listOf("Library top-level", "Hello, Main"), events)
     }
 
     @Test
-    fun loadKatariScriptExecutesImportedTopLevelBeforeMain() = runTest {
+    fun importKatariScriptFunctionCanUseImportedTopLevelVariables() = runTest {
         val events = mutableListOf<String>()
         val program = KatariNarrativeProgram(
             filename = "main.ktr",
             code = """
-                load katari "library.ktr"
-                "Main"
+                import katari "library.ktr" as library
+                library.greet("Main")
             """.trimIndent(),
             sourceProvider = mapSourceProvider(
                 "library.ktr" to """
-                    "Loaded"
-                    fun unused() {
-                        "Unused"
+                    val prefix = "Library"
+                    fun greet(name: String) {
+                        "${'$'}prefix ${'$'}name"
                     }
                 """.trimIndent(),
             ),
@@ -89,7 +92,7 @@ class KatariImportsTest {
         instance.join()
 
         assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
-        assertEquals(listOf("Loaded", "Main"), events)
+        assertEquals(listOf("Library Main"), events)
     }
 
     @Test
@@ -128,12 +131,12 @@ class KatariImportsTest {
     }
 
     @Test
-    fun loadKatariScriptAsNamespaceExecutesTopLevelWithNamespacedFunctions() = runTest {
+    fun importKatariScriptAsNamespaceExecutesTopLevelWithNamespacedFunctions() = runTest {
         val events = mutableListOf<String>()
         val program = KatariNarrativeProgram(
             filename = "main.ktr",
             code = """
-                load katari "library.ktr" as library
+                import katari "library.ktr" as library
                 library.greet("Main")
             """.trimIndent(),
             sourceProvider = mapSourceProvider(
@@ -160,49 +163,34 @@ class KatariImportsTest {
     }
 
     @Test
-    fun loadKatariScriptRejectsCircularLoads() {
-        val error = assertFailsWith<IllegalArgumentException> {
-            KatariNarrativeProgram(
-                filename = "main.ktr",
-                code = "load katari \"a.ktr\"",
-                sourceProvider = mapSourceProvider(
-                    "a.ktr" to "load katari \"b.ktr\"",
-                    "b.ktr" to "load katari \"a.ktr\"",
-                ),
-            )
+    fun importKatariScriptAsNamespaceExposesTopLevelProperties() = runTest {
+        val captures = mutableListOf<IntValue>()
+        val bindings = NarrativeBindings {
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(CustomFunctionParameter("value", "Int")),
+            ) { args, _ ->
+                captures += args.single() as IntValue
+                UnitValue
+            }
         }
-
-        assertTrue(error.message?.contains("Circular Katari load") == true)
-    }
-
-    @Test
-    fun importKatariScriptAllowsCircularDeclarationImports() = runTest {
-        val events = mutableListOf<String>()
         val program = KatariNarrativeProgram(
             filename = "main.ktr",
             code = """
-                import katari "a.ktr"
-                fromA()
-                fromB()
+                import katari "library.ktr" as library
+                capture(library.answer)
             """.trimIndent(),
+            bindings = bindings,
             sourceProvider = mapSourceProvider(
-                "a.ktr" to """
-                    import katari "b.ktr"
-                    fun fromA() {
-                        "A"
-                    }
-                """.trimIndent(),
-                "b.ktr" to """
-                    import katari "a.ktr"
-                    fun fromB() {
-                        "B"
-                    }
+                "library.ktr" to """
+                    val answer = 42
                 """.trimIndent(),
             ),
         )
         val instance = KatariInstance(
             program = program,
-            executionEnvironment = NarrativeBuiltinFunctions.environment(recordingHost(events)),
+            initialState = KatariState(programVersion = program.version, tasks = listOf(TaskState(id = "main"))),
+            executionEnvironment = bindings.executionEnvironment,
             coroutineScope = this,
         )
 
@@ -211,7 +199,40 @@ class KatariImportsTest {
         instance.join()
 
         assertEquals(TaskStatus.Completed, instance.currentState().tasks.single().status)
-        assertEquals(listOf("A", "B"), events)
+        assertEquals(listOf(42), captures.map { it.value })
+    }
+
+    @Test
+    fun importKatariScriptRejectsCircularImports() {
+        val error = assertFailsWith<IllegalArgumentException> {
+            KatariNarrativeProgram(
+                filename = "main.ktr",
+                code = "import katari \"a.ktr\"",
+                sourceProvider = mapSourceProvider(
+                    "a.ktr" to "import katari \"b.ktr\"",
+                    "b.ktr" to "import katari \"a.ktr\"",
+                ),
+            )
+        }
+
+        assertTrue(error.message?.contains("Circular Katari import") == true)
+    }
+
+    @Test
+    fun preprocessorInstructionsAreExposedAndRemovedBeforeParsing() {
+        val analysis = analyzeKatariNarrativeScript(
+            filename = "main.ktr",
+            code = """
+                #script-version 2 // host can decide whether to restore state
+                #loader server startup
+                "Main"
+            """.trimIndent(),
+        )
+        val instructions = analysis.preprocessorInstructions.getValue("main.ktr")
+
+        assertEquals(listOf("script-version", "loader"), instructions.map { it.name })
+        assertEquals(listOf("2"), instructions[0].arguments)
+        assertEquals(listOf("server", "startup"), instructions[1].arguments)
     }
 
     @Test

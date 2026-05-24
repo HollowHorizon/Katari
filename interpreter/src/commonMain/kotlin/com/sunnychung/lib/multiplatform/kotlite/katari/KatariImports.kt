@@ -1,45 +1,7 @@
 package com.sunnychung.lib.multiplatform.kotlite.katari
 
 import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
-import com.sunnychung.lib.multiplatform.kotlite.model.ASTNode
-import com.sunnychung.lib.multiplatform.kotlite.model.AssignmentNode
-import com.sunnychung.lib.multiplatform.kotlite.model.BinaryOpNode
-import com.sunnychung.lib.multiplatform.kotlite.model.BlockNode
-import com.sunnychung.lib.multiplatform.kotlite.model.ClassDeclarationNode
-import com.sunnychung.lib.multiplatform.kotlite.model.DoWhileNode
-import com.sunnychung.lib.multiplatform.kotlite.model.ElvisOpNode
-import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallArgumentNode
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionCallNode
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionDeclarationNode
-import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterNode
-import com.sunnychung.lib.multiplatform.kotlite.model.IfNode
-import com.sunnychung.lib.multiplatform.kotlite.model.IndexOpNode
-import com.sunnychung.lib.multiplatform.kotlite.model.InfixFunctionCallNode
-import com.sunnychung.lib.multiplatform.kotlite.model.KatariImportNode
-import com.sunnychung.lib.multiplatform.kotlite.model.KatariQualifiedImportNode
-import com.sunnychung.lib.multiplatform.kotlite.model.KatariScriptImportNode
-import com.sunnychung.lib.multiplatform.kotlite.model.LambdaLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.NavigationNode
-import com.sunnychung.lib.multiplatform.kotlite.model.PropertyDeclarationNode
-import com.sunnychung.lib.multiplatform.kotlite.model.ReturnNode
-import com.sunnychung.lib.multiplatform.kotlite.model.ScriptNode
-import com.sunnychung.lib.multiplatform.kotlite.model.SourcePosition
-import com.sunnychung.lib.multiplatform.kotlite.model.StringNode
-import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.StructEntryLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.StructLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.ThrowNode
-import com.sunnychung.lib.multiplatform.kotlite.model.TryNode
-import com.sunnychung.lib.multiplatform.kotlite.model.TypeNode
-import com.sunnychung.lib.multiplatform.kotlite.model.UnaryOpNode
-import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
-import com.sunnychung.lib.multiplatform.kotlite.model.WhenConditionNode
-import com.sunnychung.lib.multiplatform.kotlite.model.WhenEntryNode
-import com.sunnychung.lib.multiplatform.kotlite.model.WhenNode
-import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
-import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeLiteralNode
-import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.*
 
 data class KatariSourceRequest(
     val path: String,
@@ -67,15 +29,22 @@ data class KatariImportResolution(
     val script: ScriptNode,
     val nameAliases: Map<String, String> = emptyMap(),
     val scriptNamespaces: Map<String, Set<String>> = emptyMap(),
+    val preprocessorInstructions: Map<String, List<KatariPreprocessorInstruction>> = emptyMap(),
 )
 
 fun resolveKatariImports(
     filename: String,
     script: ScriptNode,
     sourceProvider: KatariSourceProvider,
+    preprocessorInstructions: List<KatariPreprocessorInstruction> = emptyList(),
 ): KatariImportResolution {
     val source = KatariSource(filename = filename, code = "", id = filename)
-    return KatariImportResolver(sourceProvider).resolve(script, source, emptySet())
+    return KatariImportResolver(sourceProvider).resolve(
+        script = script,
+        source = source,
+        loadingStack = emptySet(),
+        sourceInstructions = preprocessorInstructions,
+    )
 }
 
 private class KatariImportResolver(
@@ -85,10 +54,13 @@ private class KatariImportResolver(
         script: ScriptNode,
         source: KatariSource,
         loadingStack: Set<String>,
+        sourceInstructions: List<KatariPreprocessorInstruction>,
     ): KatariImportResolution {
         val outputNodes = mutableListOf<ASTNode>()
         val aliases = linkedMapOf<String, String>()
         val namespaces = linkedMapOf<String, MutableSet<String>>()
+        val instructions = linkedMapOf(source.id to sourceInstructions)
+
         script.nodes.forEach { node ->
             when (node) {
                 is KatariQualifiedImportNode -> {
@@ -97,28 +69,28 @@ private class KatariImportResolver(
                         aliases[node.alias ?: importedName] = node.path.joinToString(".")
                     }
                 }
+
                 is KatariScriptImportNode -> {
                     val imported = readImportedScript(node, source, loadingStack)
                     aliases += imported.nameAliases
-                    imported.scriptNamespaces.forEach { (name, functions) ->
-                        namespaces.getOrPut(name) { linkedSetOf() } += functions
+                    imported.preprocessorInstructions.forEach { (id, sourceDirectives) ->
+                        instructions[id] = sourceDirectives
                     }
-                    val declarations = imported.script.nodes.filterTopLevelImportDeclarations()
-                    if (node.alias != null) {
-                        val functionNames = declarations.filterIsInstance<FunctionDeclarationNode>().mapTo(linkedSetOf()) { it.name }
-                        namespaces.getOrPut(node.alias) { linkedSetOf() } += functionNames
-                        outputNodes += declarations.map { it.withKatariNamespace(node.alias, functionNames) }
-                        if (node.isLoad) {
-                            outputNodes += imported.script.nodes
-                                .filterNot { it is KatariImportNode || it is FunctionDeclarationNode || it is ClassDeclarationNode }
-                                .map { it.withKatariNamespace(node.alias, functionNames) }
-                        }
-                    } else if (node.isLoad) {
-                        outputNodes += imported.script.nodes.filterNot { it is KatariImportNode }
+                    imported.scriptNamespaces.forEach { (name, members) ->
+                        namespaces.getOrPut(name) { linkedSetOf() } += members
+                    }
+
+                    val importedNodes = imported.script.nodes.filterNot { it is KatariImportNode }
+                    val alias = node.alias
+                    if (alias == null) {
+                        outputNodes += importedNodes
                     } else {
-                        outputNodes += declarations
+                        val memberNames = importedNodes.topLevelImportMemberNames()
+                        namespaces.getOrPut(alias) { linkedSetOf() } += memberNames
+                        outputNodes += importedNodes.map { it.withKatariNamespace(alias, memberNames, isTopLevel = true) }
                     }
                 }
+
                 else -> outputNodes += node
             }
         }
@@ -126,6 +98,7 @@ private class KatariImportResolver(
             script = ScriptNode(position = script.position, nodes = outputNodes),
             nameAliases = aliases,
             scriptNamespaces = namespaces.mapValues { it.value.toSet() },
+            preprocessorInstructions = instructions,
         )
     }
 
@@ -135,99 +108,107 @@ private class KatariImportResolver(
         loadingStack: Set<String>,
     ): KatariImportResolution {
         val source = sourceProvider.readSource(KatariSourceRequest(node.path, importer, node.position))
-        if (source.id in loadingStack) {
-            require(!node.isLoad) {
-                "${node.position} Circular Katari load detected for `${source.id}`"
-            }
-            return KatariImportResolution(
-                script = ScriptNode(position = node.position, nodes = emptyList()),
-            )
+
+        require(source.id !in loadingStack) {
+            "${node.position} Circular Katari import detected for `${source.id}`"
         }
+        val preprocessed = preprocessKatariSource(source.filename, source.code)
         val importedScript = KatariParser(
-            Lexer(filename = source.filename, code = source.code, isParseSingleQuotedString = true)
+            Lexer(filename = source.filename, code = preprocessed.code, isParseSingleQuotedString = true)
         ).narrativeScript()
-        return resolve(importedScript, source, loadingStack + source.id)
+        return resolve(importedScript, source, loadingStack + source.id, preprocessed.instructions)
     }
+
 }
 
-private fun List<ASTNode>.filterTopLevelImportDeclarations(): List<ASTNode> {
-    return filter { it is FunctionDeclarationNode || it is ClassDeclarationNode }
-}
-
-private fun ASTNode.withKatariNamespace(namespace: String, functionNames: Set<String>): ASTNode {
-    return transformKatariNode(functionNames) { name ->
-        if (name in functionNames) "$namespace.$name" else name
-    }.let { transformed ->
-        if (transformed is FunctionDeclarationNode && transformed.name in functionNames) {
-            transformed.copy(name = "$namespace.${transformed.name}")
-        } else {
-            transformed
+private fun List<ASTNode>.topLevelImportMemberNames(): Set<String> {
+    return mapNotNullTo(linkedSetOf()) { node ->
+        when (node) {
+            is FunctionDeclarationNode -> node.name
+            is PropertyDeclarationNode -> node.name
+            else -> null
         }
     }
 }
 
-private fun ASTNode.transformKatariNode(
-    functionNames: Set<String>,
-    mapFunctionName: (String) -> String,
+private fun ASTNode.withKatariNamespace(
+    namespace: String,
+    topLevelNames: Set<String>,
+    isTopLevel: Boolean = false,
+    shadowedNames: Set<String> = emptySet(),
 ): ASTNode {
-    fun ASTNode.transform(): ASTNode = transformKatariNode(functionNames, mapFunctionName)
+    fun ASTNode.transform(shadowed: Set<String> = shadowedNames): ASTNode =
+        withKatariNamespace(namespace, topLevelNames, isTopLevel = false, shadowedNames = shadowed)
+
+    fun String.namespacedIfVisible(): String {
+        return if (this in topLevelNames && this !in shadowedNames) "$namespace.$this" else this
+    }
+
     return when (this) {
         is FunctionDeclarationNode -> copy(
-            valueParameters = valueParameters.map { it.transformParameter(functionNames, mapFunctionName) },
-            body = body?.transformBlock(functionNames, mapFunctionName),
+            name = if (isTopLevel && name in topLevelNames) "$namespace.$name" else name,
+            valueParameters = valueParameters.map { it.transformParameter(namespace, topLevelNames, shadowedNames) },
+            body = body?.transformBlock(
+                namespace = namespace,
+                topLevelNames = topLevelNames,
+                shadowedNames = shadowedNames + valueParameters.map { it.name } + setOfNotNull(receiver?.name),
+            ),
         )
+
         is PropertyDeclarationNode -> copy(
+            name = if (isTopLevel && name in topLevelNames) "$namespace.$name" else name,
             initialValue = initialValue?.transform(),
         )
-        is BlockNode -> transformBlock(functionNames, mapFunctionName)
+
+        is BlockNode -> transformBlock(namespace, topLevelNames, shadowedNames)
+
+        is VariableReferenceNode -> VariableReferenceNode(position, variableName.namespacedIfVisible())
+
         is FunctionCallNode -> copy(
-            function = when (function) {
-                is VariableReferenceNode -> {
-                    val name = function.variableName
-                    if (name in functionNames) VariableReferenceNode(function.position, mapFunctionName(name)) else function
-                }
-                else -> function.transform()
-            },
+            function = function.transform(),
             arguments = arguments.map { it.copy(value = it.value.transform()) },
         )
+
         is FunctionCallArgumentNode -> copy(value = value.transform())
         is BinaryOpNode -> copy(node1 = node1.transform(), node2 = node2.transform())
         is UnaryOpNode -> copy(node = node?.transform())
         is InfixFunctionCallNode -> copy(node1 = node1.transform(), node2 = node2.transform())
         is ElvisOpNode -> copy(primaryNode = primaryNode.transform(), fallbackNode = fallbackNode.transform())
-        is AssignmentNode -> AssignmentNode(subject = subject.transform(), operator = operator, value = value.transform())
+        is AssignmentNode -> copy(subject = subject.transform(), value = value.transform())
         is NavigationNode -> copy(subject = subject.transform())
-        is IndexOpNode -> IndexOpNode(position = position, subject = subject.transform(), arguments = arguments.map { it.transform() })
+        is IndexOpNode -> IndexOpNode(position, subject.transform(), arguments.map { it.transform() })
         is IfNode -> copy(
             condition = condition.transform(),
-            trueBlock = trueBlock?.transformBlock(functionNames, mapFunctionName),
-            falseBlock = falseBlock?.transformBlock(functionNames, mapFunctionName),
+            trueBlock = trueBlock?.transformBlock(namespace, topLevelNames, shadowedNames),
+            falseBlock = falseBlock?.transformBlock(namespace, topLevelNames, shadowedNames),
         )
-        is WhileNode -> copy(condition = condition.transform(), body = body?.transformBlock(functionNames, mapFunctionName))
-        is DoWhileNode -> copy(condition = condition.transform(), body = body?.transformBlock(functionNames, mapFunctionName))
-        is ForNode -> copy(subject = subject.transform(), body = body.transformBlock(functionNames, mapFunctionName))
+        is WhileNode -> copy(condition = condition.transform(), body = body?.transformBlock(namespace, topLevelNames, shadowedNames))
+        is DoWhileNode -> copy(condition = condition.transform(), body = body?.transformBlock(namespace, topLevelNames, shadowedNames))
+        is ForNode -> copy(
+            subject = subject.transform(),
+            body = body.transformBlock(namespace, topLevelNames, shadowedNames + variables.map { it.name }),
+        )
         is ReturnNode -> copy(value = value?.transform())
         is ThrowNode -> copy(value = value.transform())
         is TryNode -> copy(
-            mainBlock = mainBlock.transformBlock(functionNames, mapFunctionName),
-            catchBlocks = catchBlocks.map { it.copy(block = it.block.transformBlock(functionNames, mapFunctionName)) },
-            finallyBlock = finallyBlock?.transformBlock(functionNames, mapFunctionName),
+            mainBlock = mainBlock.transformBlock(namespace, topLevelNames, shadowedNames),
+            catchBlocks = catchBlocks.map { catch ->
+                catch.copy(block = catch.block.transformBlock(namespace, topLevelNames, shadowedNames + catch.valueName))
+            },
+            finallyBlock = finallyBlock?.transformBlock(namespace, topLevelNames, shadowedNames),
         )
         is WhenNode -> copy(
             subject = subject?.copy(value = subject.value.transform()),
             entries = entries.map { entry ->
-                WhenEntryNode(
-                    position = entry.position,
-                    conditions = entry.conditions.map { condition ->
-                        condition.copy(expression = condition.expression.transform())
-                    },
-                    body = entry.body.transformBlock(functionNames, mapFunctionName),
+                entry.copy(
+                    conditions = entry.conditions.map { it.copy(expression = it.expression.transform()) },
+                    body = entry.body.transformBlock(namespace, topLevelNames, shadowedNames),
                 )
             },
         )
         is LambdaLiteralNode -> copy(
-            declaredValueParameters = declaredValueParameters.map { it.transformParameter(functionNames, mapFunctionName) },
-            body = body.transformBlock(functionNames, mapFunctionName),
+            declaredValueParameters = declaredValueParameters.map { it.transformParameter(namespace, topLevelNames, shadowedNames) },
+            body = body.transformBlock(namespace, topLevelNames, shadowedNames + valueParameters.map { it.name }),
         )
         is XmlNodeLiteralNode -> copy(
             attributes = attributes.map { it.copy(value = it.value.transform()) },
@@ -243,17 +224,27 @@ private fun ASTNode.transformKatariNode(
 }
 
 private fun FunctionValueParameterNode.transformParameter(
-    functionNames: Set<String>,
-    mapFunctionName: (String) -> String,
+    namespace: String,
+    topLevelNames: Set<String>,
+    shadowedNames: Set<String>,
 ): FunctionValueParameterNode {
     return copy(
-        defaultValue = defaultValue?.transformKatariNode(functionNames, mapFunctionName),
+        defaultValue = defaultValue?.withKatariNamespace(namespace, topLevelNames, shadowedNames = shadowedNames),
     )
 }
 
 private fun BlockNode.transformBlock(
-    functionNames: Set<String>,
-    mapFunctionName: (String) -> String,
+    namespace: String,
+    topLevelNames: Set<String>,
+    shadowedNames: Set<String>,
 ): BlockNode {
-    return copy(statements = statements.map { it.transformKatariNode(functionNames, mapFunctionName) })
+    var localShadowed = shadowedNames
+    val transformed = statements.map { statement ->
+        statement.withKatariNamespace(namespace, topLevelNames, shadowedNames = localShadowed).also {
+            if (statement is PropertyDeclarationNode) {
+                localShadowed += statement.name
+            }
+        }
+    }
+    return copy(statements = transformed)
 }

@@ -2,6 +2,7 @@ package com.sunnychung.lib.multiplatform.kotlite.model
 
 import com.sunnychung.lib.multiplatform.kotlite.Interpreter
 import com.sunnychung.lib.multiplatform.kotlite.Parser
+import com.sunnychung.lib.multiplatform.kotlite.katari.KatariParser
 import com.sunnychung.lib.multiplatform.kotlite.lexer.Lexer
 
 fun String.toTypeNode(filename: String) = Parser(Lexer(filename, this))
@@ -37,7 +38,7 @@ class CustomFunctionDeclarationNode(
     },
     declaredModifiers = modifiers ?: def.modifiers,
     body = body ?: def.inlineFunctionBody?.let {
-        Parser(Lexer(def.position.filename, it)).functionBody()
+        KatariParser(Lexer(def.position.filename, it, isParseSingleQuotedString = true)).functionBody()
     } ?: BlockNode(emptyList(), SourcePosition(def.position.filename, 1, 1), ScopeType.Function, FunctionBodyFormat.Block, def.returnType.toTypeNode(def.position.filename)),
     transformedRefName = transformedRefName,
 ) {

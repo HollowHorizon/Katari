@@ -15,6 +15,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.InfixFunctionCallNode
 import com.sunnychung.lib.multiplatform.kotlite.model.KatariImportNode
 import com.sunnychung.lib.multiplatform.kotlite.model.KatariQualifiedImportNode
 import com.sunnychung.lib.multiplatform.kotlite.model.KatariScriptImportNode
+import com.sunnychung.lib.multiplatform.kotlite.model.LabelNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeCheckpointNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.NarrativeChooseNode
@@ -72,14 +73,13 @@ class KatariParser(
                 "checkpoint" -> narrativeCheckpoint()
                 "jump" -> narrativeJump()
                 "import" -> katariImport()
-                "load" -> katariLoad()
                 else -> null
             }
         }
         return null
     }
 
-    override fun customPrimaryExpressionOrNull(label: com.sunnychung.lib.multiplatform.kotlite.model.LabelNode?): ASTNode? {
+    override fun customPrimaryExpressionOrNull(label: LabelNode?): ASTNode? {
         if (isCurrentToken(TokenType.Operator, "<")) {
             return xmlNodeLiteral()
         }
@@ -344,16 +344,6 @@ class KatariParser(
         }
         val alias = optionalAlias()
         return KatariQualifiedImportNode(position = token.position, path = path, alias = alias, isWildcard = isWildcard)
-    }
-
-    private fun katariLoad(): KatariScriptImportNode {
-        val token = eat(TokenType.Identifier, "load")
-        repeatedNL()
-        eat(TokenType.Identifier, "katari")
-        repeatedNL()
-        val path = stringImportPath()
-        val alias = optionalAlias()
-        return KatariScriptImportNode(position = token.position, path = path, alias = alias, isLoad = true)
     }
 
     private fun optionalAlias(): String? {
