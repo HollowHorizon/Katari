@@ -122,6 +122,8 @@ import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeLiteralNode
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeValue
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.XML_TEXT_NODE_NAME
+import com.sunnychung.lib.multiplatform.kotlite.model.XML_TEXT_VALUE_ATTRIBUTE
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlValue
 import com.sunnychung.lib.multiplatform.kotlite.util.ClassMemberResolver
 
@@ -1803,6 +1805,7 @@ open class Interpreter(val rootNode: ASTNode, val executionEnvironment: Executio
             children = children.flatMap { child ->
                 when (val value = child.eval()) {
                     is XmlValue -> listOf(value)
+                    is StringValue -> listOf(value.toXmlTextValue())
                     is StructArrayValue -> value.elements.filterIsInstance<XmlValue>()
                     is NullValue, UnitValue -> emptyList()
                     else -> emptyList()
@@ -1812,6 +1815,13 @@ open class Interpreter(val rootNode: ASTNode, val executionEnvironment: Executio
         )
     }
     fun XmlAttributeLiteralNode.eval() = XmlAttributeValue(name, value.eval() as RuntimeValue)
+    private fun StringValue.toXmlTextValue() = XmlValue(
+        name = XML_TEXT_NODE_NAME,
+        attributes = listOf(XmlAttributeValue(XML_TEXT_VALUE_ATTRIBUTE, this)),
+        children = emptyList(),
+        symbolTable = symbolTable(),
+    )
+
     fun StructLiteralNode.eval() = StructValue(
         entries.associate { it.key to (it.value.eval() as RuntimeValue) },
         symbolTable(),

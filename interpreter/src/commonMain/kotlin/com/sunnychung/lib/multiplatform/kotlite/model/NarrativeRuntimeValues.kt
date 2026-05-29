@@ -77,6 +77,9 @@ class XmlValue(
     )
 
     override fun convertToString(): String {
+        if (name == XML_TEXT_NODE_NAME) {
+            return attributes.firstOrNull { it.name == XML_TEXT_VALUE_ATTRIBUTE }?.value?.convertToString().orEmpty()
+        }
         val attrs = attributes.joinToString("") { " ${it.name}=\"${it.value.convertToString()}\"" }
         if (children.isEmpty()) return "<$name$attrs />"
         return "<$name$attrs>${children.joinToString("") { it.convertToString() }}</$name>"
@@ -279,5 +282,7 @@ class KatariTaskValue(
 
 const val KATARI_TASK_TYPE_ID: String = "KatariTask"
 const val XML_VALUE_TYPE_ID: String = "XmlValue"
+const val XML_TEXT_NODE_NAME: String = "#text"
+const val XML_TEXT_VALUE_ATTRIBUTE: String = "value"
 const val STRUCT_VALUE_TYPE_ID: String = "StructValue"
 const val STRUCT_ARRAY_VALUE_TYPE_ID: String = "StructArrayValue"

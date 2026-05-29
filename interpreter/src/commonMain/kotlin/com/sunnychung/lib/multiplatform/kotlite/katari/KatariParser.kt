@@ -41,6 +41,7 @@ import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
 
 class KatariParser(
     lexer: Lexer,
+    private val xmlTextElementNames: Set<String> = setOf("text"),
 ) : Parser(lexer) {
 
     fun narrativeScript(): ScriptNode {
@@ -98,9 +99,10 @@ class KatariParser(
         return null
     }
 
-    private fun xmlNodeLiteral(): XmlNodeLiteralNode {
+    private fun xmlNodeLiteral(parentParsesText: Boolean = false): XmlNodeLiteralNode {
         val start = eat(TokenType.Operator, "<")
         val name = eat(TokenType.Identifier).value as String
+        val parsesTextChildren = parentParsesText || name in xmlTextElementNames
         val attributes = mutableListOf<XmlAttributeLiteralNode>()
         while (!isCurrentToken(TokenType.Operator, ">") && !isCurrentToken(TokenType.Operator, "/")) {
             if (currentToken.type == TokenType.NewLine) {
@@ -121,16 +123,22 @@ class KatariParser(
         }
         if (isCurrentToken(TokenType.Operator, "/")) {
             eat(TokenType.Operator, "/")
-            eat(TokenType.Operator, ">")
+            eatXmlTagEnd(readNextAsXmlText = parentParsesText)
             return XmlNodeLiteralNode(start.position, name, attributes, emptyList())
         }
-        eat(TokenType.Operator, ">")
+        eatXmlTagEnd(readNextAsXmlText = parsesTextChildren)
 
         val children = mutableListOf<ASTNode>()
         while (!isXmlClosingTag(name)) {
             when {
-                currentToken.type in setOf(TokenType.NewLine, TokenType.Semicolon) -> semis()
-                isCurrentToken(TokenType.Operator, "<") -> children += xmlNodeLiteral()
+                parsesTextChildren && currentToken.type == TokenType.StringLiteral -> {
+                    val token = eat(TokenType.StringLiteral)
+                    if ((token.value as String).isNotEmpty()) {
+                        children += StringNode(token.position, listOf(StringLiteralNode(token.position, token.value)))
+                    }
+                }
+                !parsesTextChildren && currentToken.type in setOf(TokenType.NewLine, TokenType.Semicolon) -> semis()
+                isCurrentToken(TokenType.Operator, "<") -> children += xmlNodeLiteral(parentParsesText = parsesTextChildren)
                 else -> {
                     children += statement()
                     if (currentToken.type in setOf(TokenType.NewLine, TokenType.Semicolon)) {
@@ -139,8 +147,18 @@ class KatariParser(
                 }
             }
         }
-        eatXmlClosingTag(name)
+        eatXmlClosingTag(name, readNextAsXmlText = parentParsesText)
         return XmlNodeLiteralNode(start.position, name, attributes, children)
+    }
+
+    private fun eatXmlTagEnd(readNextAsXmlText: Boolean) {
+        if (!isCurrentToken(TokenType.Operator, ">")) {
+            throw UnexpectedTokenException(currentToken)
+        }
+        if (readNextAsXmlText) {
+            lexer.switchToMode(Lexer.Mode.XmlText)
+        }
+        eat(TokenType.Operator, ">")
     }
 
     private fun xmlAttributeValue(): ASTNode {
@@ -203,11 +221,11 @@ class KatariParser(
         }
     }
 
-    private fun eatXmlClosingTag(name: String) {
+    private fun eatXmlClosingTag(name: String, readNextAsXmlText: Boolean) {
         eat(TokenType.Operator, "<")
         eat(TokenType.Operator, "/")
         eat(TokenType.Identifier, name)
-        eat(TokenType.Operator, ">")
+        eatXmlTagEnd(readNextAsXmlText = readNextAsXmlText)
     }
 
     private fun structLiteral(): StructLiteralNode {

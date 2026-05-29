@@ -57,11 +57,13 @@ import com.sunnychung.lib.multiplatform.kotlite.model.VariableReferenceNode
 import com.sunnychung.lib.multiplatform.kotlite.model.ForNode
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionModifier
 import com.sunnychung.lib.multiplatform.kotlite.model.FunctionValueParameterModifier
+import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameterNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenConditionNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenEntryNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhenNode
 import com.sunnychung.lib.multiplatform.kotlite.model.WhileNode
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlNodeLiteralNode
+import com.sunnychung.lib.multiplatform.kotlite.model.typeUpperBoundOrAny
 import kotlin.math.abs
 
 class KatariCompiler(
@@ -92,6 +94,7 @@ class KatariCompiler(
     private val taskBindings = ArrayDeque<MutableMap<String, Boolean>>()
     private val enumTypeBindings = ArrayDeque<MutableMap<String, String?>>()
     private val typeArgumentBindings = ArrayDeque<Map<String, TypeNode>>()
+    private val typeParameterFallbackBindings = ArrayDeque<Map<String, TypeNode>>()
     private val frameIdStack = ArrayDeque<Int>()
     private var xmlBuilderScopeDepth = 0
 
@@ -110,6 +113,7 @@ class KatariCompiler(
         taskBindings.clear()
         enumTypeBindings.clear()
         typeArgumentBindings.clear()
+        typeParameterFallbackBindings.clear()
         frameIdStack.clear()
         xmlBuilderScopeDepth = 0
 
@@ -1299,6 +1303,9 @@ class KatariCompiler(
         val replacement = typeArgumentBindings
             .asReversed()
             .firstNotNullOfOrNull { bindings -> bindings[type.name] }
+            ?: typeParameterFallbackBindings
+                .asReversed()
+                .firstNotNullOfOrNull { bindings -> bindings[type.name] }
         if (replacement != null && type.arguments.isNullOrEmpty()) {
             return TypeNode(
                 position = type.position,
@@ -1382,7 +1389,7 @@ class KatariCompiler(
             }
         }
 
-        withTypeArgumentBindings(typeBindings) {
+        withTypeArgumentBindings(typeBindings, declaration.typeParameters) {
         val body = declaration.body
             ?: throw UnsupportedOperationException("${declaration.position} Katari user function `${functionName}` must have a body")
 
@@ -1464,15 +1471,22 @@ class KatariCompiler(
         }
     }
 
-    private inline fun withTypeArgumentBindings(bindings: Map<String, TypeNode>, block: () -> Unit) {
-        if (bindings.isEmpty()) {
+    private inline fun withTypeArgumentBindings(
+        bindings: Map<String, TypeNode>,
+        typeParameters: List<TypeParameterNode>,
+        block: () -> Unit,
+    ) {
+        val fallbackBindings = typeParameters.associate { it.name to it.typeUpperBoundOrAny() }
+        if (bindings.isEmpty() && fallbackBindings.isEmpty()) {
             block()
             return
         }
         typeArgumentBindings.addLast(bindings)
+        typeParameterFallbackBindings.addLast(fallbackBindings)
         try {
             block()
         } finally {
+            typeParameterFallbackBindings.removeLast()
             typeArgumentBindings.removeLast()
         }
     }

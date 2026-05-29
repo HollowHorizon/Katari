@@ -22,6 +22,8 @@ import com.sunnychung.lib.multiplatform.kotlite.model.StructArrayValue
 import com.sunnychung.lib.multiplatform.kotlite.model.StructValue
 import com.sunnychung.lib.multiplatform.kotlite.model.UnitValue
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlValue
+import com.sunnychung.lib.multiplatform.kotlite.model.XML_TEXT_NODE_NAME
+import com.sunnychung.lib.multiplatform.kotlite.model.XML_TEXT_VALUE_ATTRIBUTE
 import com.sunnychung.lib.multiplatform.kotlite.stdlib.AllStdLibModules
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -87,6 +89,56 @@ class KatariDataLiteralTest {
         assertEquals(listOf("button", "button", "card", "card"), root.children.map { it.name })
         assertEquals("Выход", (root.children[1].attributes.single().value as StringValue).value)
         assertEquals(listOf("Hello", "World"), root.children.drop(2).map { (it.attributes.single().value as StringValue).value })
+    }
+
+    @Test
+    fun xmlLiteralSupportsRawTextInsideTextElements() = runTest {
+        val captures = mutableListOf<RuntimeValue>()
+        val bindings = NarrativeBindings {
+            immediateFunction(
+                name = "capture",
+                valueParameters = listOf(CustomFunctionParameter("value", "Any")),
+            ) { args, _ ->
+                captures += args.single()
+                UnitValue
+            }
+        }
+        val instance = KatariInstance(
+            program = KatariNarrativeProgram(
+                filename = "<Narrative>",
+                code = """
+                    capture(
+                        <box>
+                            <text>Hello <b>World</b><pause delay="1s" /> Done</text>
+                        </box>
+                    )
+                """.trimIndent(),
+                bindings = bindings,
+            ),
+            initialState = KatariState(
+                programVersion = 1,
+                tasks = listOf(TaskState(id = "main")),
+                globals = bindings.globals,
+            ),
+            executionEnvironment = bindings.executionEnvironment,
+            snapshotCodec = bindings.snapshotCodec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+        instance.join()
+
+        val root = assertIs<XmlValue>(captures.single())
+        val text = root.children.single()
+        val bold = text.children[1]
+
+        assertEquals("text", text.name)
+        assertEquals(listOf(XML_TEXT_NODE_NAME, "b", "pause", XML_TEXT_NODE_NAME), text.children.map { it.name })
+        assertEquals("Hello ", text.children[0].textContent())
+        assertEquals("World", bold.children.single().textContent())
+        assertEquals("1s", (text.children[2].attributes.single().value as StringValue).value)
+        assertEquals(" Done", text.children[3].textContent())
     }
 
     @Test
@@ -466,6 +518,11 @@ class KatariDataLiteralTest {
             )
         }
     }
+}
+
+private fun XmlValue.textContent(): String {
+    require(name == XML_TEXT_NODE_NAME) { "Expected XML text node but got $name" }
+    return attributes.first { it.name == XML_TEXT_VALUE_ATTRIBUTE }.value.convertToString()
 }
 
 private data class XmlLiteralValue(var value: String)

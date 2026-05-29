@@ -249,6 +249,20 @@ open class Lexer(
         }
     }
 
+    internal fun readXmlTextContent(): Token {
+        val sb = StringBuilder()
+        val position = makeSourcePosition()
+        while (currentChar() !in setOf('<', null)) {
+            sb.append(currentChar()!!)
+            advanceChar()
+        }
+        try {
+            return Token(TokenType.StringLiteral, sb.toString(), position, makeSourcePosition())
+        } finally {
+            backward()
+        }
+    }
+
     fun readToken(): Token {
         while (currentChar() != null) {
             val c = currentChar()!!
@@ -453,6 +467,14 @@ open class Lexer(
                         c == '"' -> Token(TokenType.StringLiteral, "$c", makeSourcePosition(), makeNextCharSourcePosition())
                         else -> readMultilineStringContent()
                     }
+
+                    Mode.XmlText -> return when {
+                        c == '<' -> {
+                            switchToPreviousMode()
+                            Token(TokenType.Operator, c.toString(), makeSourcePosition(), makeNextCharSourcePosition())
+                        }
+                        else -> readXmlTextContent()
+                    }
                 }
             } finally {
                 advanceChar()
@@ -474,7 +496,7 @@ open class Lexer(
     }
 
     enum class Mode {
-        Main, QuotedString, MultilineString
+        Main, QuotedString, MultilineString, XmlText
     }
 }
 

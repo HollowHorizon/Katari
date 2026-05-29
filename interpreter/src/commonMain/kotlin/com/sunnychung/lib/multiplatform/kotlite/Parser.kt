@@ -1433,12 +1433,12 @@ open class Parser(protected val lexer: Lexer) {
         val arguments = mutableListOf<TypeNode>()
         eat(TokenType.Operator, "<")
         repeatedNL()
-        arguments += type()
+        arguments += type(isParseDottedIdentifiers = true, isIncludeLastIdentifierAsTypeName = true)
         repeatedNL()
         while (!isCurrentToken(TokenType.Operator, ">")) {
             eat(TokenType.Symbol, ",")
             repeatedNL()
-            arguments += type()
+            arguments += type(isParseDottedIdentifiers = true, isIncludeLastIdentifierAsTypeName = true)
             repeatedNL()
         }
         if (isCurrentToken(TokenType.Symbol, ",")) {
@@ -1517,7 +1517,7 @@ open class Parser(protected val lexer: Lexer) {
      *     simpleIdentifier [{NL} typeArguments]
      *
      */
-    fun typeReference(isParseDottedIdentifiers: Boolean = true, isIncludeLastIdentifierAsTypeName: Boolean = true): TypeNode {
+    fun typeReference(isParseDottedIdentifiers: Boolean = false, isIncludeLastIdentifierAsTypeName: Boolean = false): TypeNode {
         if (isCurrentToken(TokenType.Operator, "*")) {
             val t = eat(TokenType.Operator, "*")
             return TypeNode(t.position, "*", null, false)
@@ -1653,7 +1653,7 @@ open class Parser(protected val lexer: Lexer) {
      *     [typeModifiers] (functionType | parenthesizedType | nullableType | typeReference | definitelyNonNullableType)
      *
      */
-    fun type(isTryParenthesizedType: Boolean = true, isParseDottedIdentifiers: Boolean = true, isIncludeLastIdentifierAsTypeName: Boolean = true): TypeNode {
+    fun type(isTryParenthesizedType: Boolean = true, isParseDottedIdentifiers: Boolean = false, isIncludeLastIdentifierAsTypeName: Boolean = false): TypeNode {
         val originalTokenIndex = tokenIndex
         val lastException: Throwable?
         try {
@@ -2037,7 +2037,7 @@ open class Parser(protected val lexer: Lexer) {
         val type = if (isCurrentToken(TokenType.Operator, "(")) {
             nullableParenthesizedType()
         } else {
-            typeReference(isParseDottedIdentifiers = true, isIncludeLastIdentifierAsTypeName = false)
+            typeReference(isParseDottedIdentifiers = true)
         }
         val isNullable = if (isCurrentToken(TokenType.Operator, "?.")) {
             eat(TokenType.Operator, "?.")

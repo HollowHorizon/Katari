@@ -29,6 +29,8 @@ import com.sunnychung.lib.multiplatform.kotlite.model.StructValue
 import com.sunnychung.lib.multiplatform.kotlite.model.SymbolTable
 import com.sunnychung.lib.multiplatform.kotlite.model.UnitValue
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlAttributeValue
+import com.sunnychung.lib.multiplatform.kotlite.model.XML_TEXT_NODE_NAME
+import com.sunnychung.lib.multiplatform.kotlite.model.XML_TEXT_VALUE_ATTRIBUTE
 import com.sunnychung.lib.multiplatform.kotlite.model.XmlValue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -1389,6 +1391,7 @@ class KatariInstance(
     private fun RuntimeValue.asXmlChildren(): List<XmlValue> {
         return when (this) {
             is XmlValue -> listOf(this)
+            is StringValue -> listOf(toXmlTextValue())
             is StructArrayValue -> elements.flatMap { it.asXmlChildren() }
             is NullValue, UnitValue -> emptyList()
             is KotlinValueHolder<*> -> {
@@ -1400,6 +1403,13 @@ class KatariInstance(
             else -> emptyList()
         }
     }
+
+    private fun StringValue.toXmlTextValue() = XmlValue(
+        name = XML_TEXT_NODE_NAME,
+        attributes = listOf(XmlAttributeValue(XML_TEXT_VALUE_ATTRIBUTE, this)),
+        children = emptyList(),
+        symbolTable = snapshotCodec.symbolTable(),
+    )
 
     private fun slotVariableName(slot: Int): String = "$SLOT_VARIABLE_PREFIX$slot"
 
