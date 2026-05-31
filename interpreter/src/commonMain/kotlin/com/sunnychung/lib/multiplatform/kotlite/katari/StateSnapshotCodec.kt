@@ -73,7 +73,7 @@ class StateSnapshotCodec(
                 nextCallFrameId = task.nextCallFrameId,
                 slots = task.slots.mapValues { (_, value) -> serializeSlot(value) },
                 xmlBuilders = task.xmlBuilders.map { builder -> serializeXmlBuilder(builder, valueTable) },
-                status = serializeStatus(task.status),
+                status = serializeStatus(task.status, valueTable),
                 resultRef = task.result?.let { valueTable.reference(it) },
                 raceGroupId = task.raceGroupId,
                 parentTaskId = task.parentTaskId,
@@ -135,7 +135,7 @@ class StateSnapshotCodec(
                     xmlBuilders = task.xmlBuilders.map { builder ->
                         restoreXmlBuilder(builder) { ref -> restoreSharedValue(ref.valueId) }
                     },
-                    status = restoreStatus(task.status),
+                    status = restoreStatus(task.status) { ref -> sharedValues.getValue(ref.valueId) },
                     result = task.resultRef?.let { sharedValues.getValue(it.valueId) },
                     raceGroupId = task.raceGroupId,
                     parentTaskId = task.parentTaskId,
@@ -389,13 +389,17 @@ class StateSnapshotCodec(
         }
     }
 
-    private fun serializeStatus(status: TaskStatus): TaskStatusSnapshot {
+    private fun serializeStatus(
+        status: TaskStatus,
+        valueTable: NarrativeSnapshotValueTable,
+    ): TaskStatusSnapshot {
         return when (status) {
             TaskStatus.Ready -> TaskStatusSnapshot.Ready
-            is TaskStatus.Paused -> TaskStatusSnapshot.Paused(serializeStatus(status.innerStatus))
+            is TaskStatus.Paused -> TaskStatusSnapshot.Paused(serializeStatus(status.innerStatus, valueTable))
             is TaskStatus.SuspendedCall -> TaskStatusSnapshot.SuspendedCall(
                 resultTarget = serializeResultTarget(status.resultTarget),
                 nextInstructionPointer = status.nextInstructionPointer,
+                stateRef = status.state?.let { valueTable.reference(it) },
             )
             is TaskStatus.WaitingTaskJoin -> TaskStatusSnapshot.WaitingTaskJoin(
                 taskId = status.taskId,
@@ -415,13 +419,17 @@ class StateSnapshotCodec(
         }
     }
 
-    private fun restoreStatus(status: TaskStatusSnapshot): TaskStatus {
+    private fun restoreStatus(
+        status: TaskStatusSnapshot,
+        restoreReference: (ValueReferenceSnapshot) -> RuntimeValue,
+    ): TaskStatus {
         return when (status) {
             TaskStatusSnapshot.Ready -> TaskStatus.Ready
-            is TaskStatusSnapshot.Paused -> TaskStatus.Paused(restoreStatus(status.innerStatus))
+            is TaskStatusSnapshot.Paused -> TaskStatus.Paused(restoreStatus(status.innerStatus, restoreReference))
             is TaskStatusSnapshot.SuspendedCall -> TaskStatus.SuspendedCall(
                 resultTarget = restoreResultTarget(status.resultTarget),
                 nextInstructionPointer = status.nextInstructionPointer,
+                state = status.stateRef?.let(restoreReference),
             )
             is TaskStatusSnapshot.WaitingTaskJoin -> TaskStatus.WaitingTaskJoin(
                 taskId = status.taskId,

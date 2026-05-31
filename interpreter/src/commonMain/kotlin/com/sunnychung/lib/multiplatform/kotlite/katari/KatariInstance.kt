@@ -294,7 +294,7 @@ class KatariInstance(
         val arguments = resolved.arguments
         return when (val result = definition.startCall(
             arguments,
-            KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task, resolved.typeArguments),
+            KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task, null, resolved.typeArguments),
         )) {
             is NarrativeCallResult.Returned -> {
                 currentState = currentState.updateTask(
@@ -311,10 +311,11 @@ class KatariInstance(
                 )
                 null
             }
-            NarrativeCallResult.Suspended -> {
+            is NarrativeCallResult.Suspended, is NarrativeCallResult.SuspendedWithState -> {
                 val suspendedStatus = TaskStatus.SuspendedCall(
                     resultTarget = instruction.resultTarget,
                     nextInstructionPointer = task.instructionPointer + 1,
+                    state = (result as? NarrativeCallResult.SuspendedWithState)?.state,
                 )
                 currentState = currentState.updateTask(
                     index = taskIndex,
@@ -352,11 +353,21 @@ class KatariInstance(
             inFlightTasks += request.taskId
             val instruction = resolveSuspendedCallInstruction(task)
             val resolved = resolveNarrativeCall(instruction.functionId, instruction, task)
+            val suspendedStatus = task.status as TaskStatus.SuspendedCall
             DispatchData(
                 taskId = task.id,
                 arguments = resolved.arguments,
                 definition = resolved.callable,
-                context = KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task, resolved.typeArguments),
+                context = KatariCallContextImpl(
+                    snapshotCodec.symbolTable(),
+                    currentState,
+                    task,
+                    suspendedStatus.state,
+                    resolved.typeArguments,
+                    updateSuspendedState = { state ->
+                        updateSuspendedCallState(request.taskId, state)
+                    },
+                ),
             )
         }
 
@@ -379,6 +390,25 @@ class KatariInstance(
             markTaskAsFailed(
                 taskId = dispatchData.taskId,
                 message = buildRuntimeErrorMessage(null, e),
+            )
+        }
+    }
+
+    private suspend fun updateSuspendedCallState(
+        taskId: String,
+        state: RuntimeValue,
+    ) {
+        mutex.withLock {
+            val taskIndex = currentState.tasks.indexOfFirst { task ->
+                task.id == taskId && task.status is TaskStatus.SuspendedCall
+            }
+            if (taskIndex < 0 || cancelled) return
+
+            val task = currentState.tasks[taskIndex]
+            val status = task.status as TaskStatus.SuspendedCall
+            currentState = currentState.updateTask(
+                index = taskIndex,
+                task = task.copy(status = status.copy(state = state)),
             )
         }
     }
@@ -410,7 +440,13 @@ class KatariInstance(
                 when (val result = definition.resumeCall(
                     arguments = arguments,
                     response = response,
-                    context = KatariCallContextImpl(snapshotCodec.symbolTable(), currentState, task, resolved.typeArguments),
+                    context = KatariCallContextImpl(
+                        snapshotCodec.symbolTable(),
+                        currentState,
+                        task,
+                        status.state,
+                        resolved.typeArguments,
+                    ),
                 )) {
                     is NarrativeCallResult.Returned -> {
                         val resumedTask = cleanupSlots(
@@ -431,6 +467,12 @@ class KatariInstance(
                         currentState = currentState.updateTask(
                             index = taskIndex,
                             task = task,
+                        )
+                    }
+                    is NarrativeCallResult.SuspendedWithState -> {
+                        currentState = currentState.updateTask(
+                            index = taskIndex,
+                            task = task.copy(status = status.copy(state = result.state)),
                         )
                     }
                 }
@@ -1479,8 +1521,14 @@ private class KatariCallContextImpl(
     override val symbolTable: SymbolTable,
     override val state: Any,
     override val task: Any,
+    override val suspendedState: RuntimeValue?,
     override val typeArguments: Map<String, DataType>,
-) : NarrativeCallContext, NarrativeCallDispatchContext
+    private val updateSuspendedState: suspend (RuntimeValue) -> Unit = {},
+) : NarrativeCallContext, NarrativeCallDispatchContext {
+    override suspend fun updateSuspendedState(state: RuntimeValue) {
+        updateSuspendedState.invoke(state)
+    }
+}
 
 private class KatariExpressionEvaluationException(
     val position: SourcePosition?,

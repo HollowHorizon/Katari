@@ -334,6 +334,7 @@ sealed interface TaskStatus {
     data class SuspendedCall(
         val resultTarget: ResultTarget?,
         val nextInstructionPointer: Int,
+        val state: RuntimeValue? = null,
     ) : TaskStatus
     data class WaitingTaskJoin(
         val taskId: String,
@@ -411,6 +412,7 @@ sealed interface TaskStatusSnapshot {
     data class SuspendedCall(
         val resultTarget: ResultTargetSnapshot?,
         val nextInstructionPointer: Int,
+        val stateRef: ValueReferenceSnapshot? = null,
     ) : TaskStatusSnapshot
 
     @Serializable

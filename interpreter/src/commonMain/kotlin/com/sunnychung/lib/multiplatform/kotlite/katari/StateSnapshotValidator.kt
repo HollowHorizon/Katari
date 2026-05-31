@@ -36,6 +36,11 @@ object StateSnapshotValidator {
                     values = snapshot.values,
                 )
             }
+            validateStatusValueRefs(
+                path = "tasks[$taskIndex].status",
+                status = task.status,
+                values = snapshot.values,
+            )
             task.callFrames.forEachIndexed { frameIndex, frame ->
                 frame.variableRefs.forEach { (name, ref) ->
                     validateValueRef(
@@ -68,6 +73,24 @@ object StateSnapshotValidator {
                 value = value,
                 values = snapshot.values,
             )
+        }
+    }
+
+    private fun MutableList<StateSnapshotDiagnostic>.validateStatusValueRefs(
+        path: String,
+        status: TaskStatusSnapshot,
+        values: Map<Int, ValueSnapshot>,
+    ) {
+        when (status) {
+            is TaskStatusSnapshot.Paused -> validateStatusValueRefs("$path.innerStatus", status.innerStatus, values)
+            is TaskStatusSnapshot.SuspendedCall -> status.stateRef?.let { ref ->
+                validateValueRef(
+                    path = "$path.stateRef",
+                    ref = ref,
+                    values = values,
+                )
+            }
+            else -> Unit
         }
     }
 

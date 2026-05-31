@@ -74,7 +74,7 @@ class SemanticAnalyzerSymbolTable(
                     originalName = it.first.name,
                     owner = owner,
                     type = if (owner == null) CallableType.Function else CallableType.ClassMemberFunction,
-                    isVararg = it.first.isVararg,
+                    isVararg = it.first.hasVarargParameter(),
                     arguments = it.first.valueParameters,
                     typeParameters = it.first.typeParameters,
                     receiverType = null,
@@ -159,7 +159,7 @@ class SemanticAnalyzerSymbolTable(
                         originalName = it.name,
                         owner = null,
                         type = CallableType.ClassMemberFunction,
-                        isVararg = it.isVararg,
+                        isVararg = it.hasVarargParameter(),
                         arguments = lookup2!!.resolvedValueParameterTypes,
                         typeParameters = it.typeParameters,
                         receiverType = it.receiver ?: receiverType.toTypeNode(),
@@ -177,7 +177,7 @@ class SemanticAnalyzerSymbolTable(
                     originalName = it.function.name,
                     owner = null,
                     type = CallableType.ExtensionFunction,
-                    isVararg = it.function.isVararg,
+                    isVararg = it.function.hasVarargParameter(),
                     arguments = it.function.valueParameters,
                     typeParameters = it.function.typeParameters,
                     receiverType = it.function.receiver, //it.resolvedReceiverType.toTypeNode(), //it.function.receiver,
@@ -535,6 +535,11 @@ fun FunctionDeclarationNode.toSignature(symbolTable: SemanticAnalyzerSymbolTable
             }
         }
     }
+}
+
+private fun FunctionDeclarationNode.hasVarargParameter(): Boolean {
+    return isVararg ||
+        valueParameters.firstOrNull()?.modifiers?.contains(FunctionValueParameterModifier.vararg) == true
 }
 
 data class SearchFunctionModifier(val typeFilter: Type? = null, val returnType: DataType? = null) {

@@ -70,6 +70,7 @@ fun analyzeKatariNarrativeScript(
 }
 
 internal fun ExecutionEnvironment.installKatariDataSemanticTypes() {
+    installKatariTaskSemanticTypes()
     if (findProvidedClass(XML_VALUE_TYPE_ID) == null) {
         registerClass(katariDataSemanticClass(XML_VALUE_TYPE_ID))
     }

@@ -62,15 +62,20 @@ interface NarrativeCallContext {
     val symbolTable: SymbolTable
     val state: Any
     val task: Any
+    val suspendedState: RuntimeValue?
+        get() = null
     val typeArguments: Map<String, DataType>
         get() = emptyMap()
 }
 
-interface NarrativeCallDispatchContext : NarrativeCallContext
+interface NarrativeCallDispatchContext : NarrativeCallContext {
+    suspend fun updateSuspendedState(state: RuntimeValue) = Unit
+}
 
 sealed interface NarrativeCallResult {
     data class Returned(val value: RuntimeValue) : NarrativeCallResult
     data object Suspended : NarrativeCallResult
+    data class SuspendedWithState(val state: RuntimeValue) : NarrativeCallResult
 }
 
 interface FunctionResponse {

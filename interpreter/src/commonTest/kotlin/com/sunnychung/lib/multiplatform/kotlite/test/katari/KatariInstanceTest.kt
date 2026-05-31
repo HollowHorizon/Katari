@@ -51,7 +51,9 @@ import com.sunnychung.lib.multiplatform.kotlite.model.StringValue
 import com.sunnychung.lib.multiplatform.kotlite.model.TypeParameter
 import com.sunnychung.lib.multiplatform.kotlite.stdlib.AllStdLibModules
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.SerialName
@@ -62,6 +64,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -217,6 +220,70 @@ class KatariInstanceTest {
         pendingResume!!.invoke()
         advanceUntilIdle()
         instance.join()
+    }
+
+    @Test
+    fun serializeStateIncludesSuspendedCallState() = runTest {
+        val callable = StatefulGateCallable()
+        val env = ExecutionEnvironment()
+        env.registerNarrativeCallable(callable)
+        val codec = StateSnapshotCodec(executionEnvironment = env)
+        val program = KatariNarrativeProgram(
+            filename = "<Narrative>",
+            code = "statefulGate()",
+            bindings = NarrativeBindings {
+                register(callable)
+            },
+        )
+        val instance = KatariInstance(
+            program = program,
+            initialState = KatariState(programVersion = program.version, tasks = listOf(TaskState(id = program.entryTaskId))),
+            executionEnvironment = env,
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+
+        val snapshot = instance.serializeState()
+        val status = assertIs<TaskStatusSnapshot.SuspendedCall>(snapshot.tasks.single().status)
+        val stateRef = assertNotNull(status.stateRef)
+        assertEquals(TextValueSnapshot("remaining"), snapshot.values.getValue(stateRef.valueId))
+
+        val restored = codec.restore(snapshot)
+        val restoredStatus = assertIs<TaskStatus.SuspendedCall>(restored.tasks.single().status)
+        assertEquals(StringValue("remaining", codec.symbolTable()), restoredStatus.state)
+    }
+
+    @Test
+    fun dispatchCanUpdateSuspendedCallStateBeforeResume() = runTest {
+        val callable = DispatchStateUpdateCallable(this)
+        val env = ExecutionEnvironment()
+        env.registerNarrativeCallable(callable)
+        val codec = StateSnapshotCodec(executionEnvironment = env)
+        val program = KatariNarrativeProgram(
+            filename = "<Narrative>",
+            code = "dispatchStateUpdate()",
+            bindings = NarrativeBindings {
+                register(callable)
+            },
+        )
+        val instance = KatariInstance(
+            program = program,
+            initialState = KatariState(programVersion = program.version, tasks = listOf(TaskState(id = program.entryTaskId))),
+            executionEnvironment = env,
+            snapshotCodec = codec,
+            coroutineScope = this,
+        )
+
+        instance.start()
+        advanceUntilIdle()
+
+        val snapshot = instance.serializeState()
+        val status = assertIs<TaskStatusSnapshot.SuspendedCall>(snapshot.tasks.single().status)
+        val stateRef = assertNotNull(status.stateRef)
+        assertEquals(TextValueSnapshot("updated"), snapshot.values.getValue(stateRef.valueId))
     }
 
     @Test
@@ -1848,5 +1915,69 @@ class GateCallable : NarrativeCallable {
 
     fun resume(name: String) {
         pending.remove(name)?.invoke(null)
+    }
+}
+
+class StatefulGateCallable : NarrativeCallable {
+    override val id: String = "statefulGate"
+    override val receiverType: String? = null
+    override val returnType: String = "Unit"
+    override val typeParameters: List<TypeParameter> = emptyList()
+    override val valueParameters: List<CustomFunctionParameter> = emptyList()
+
+    override suspend fun startCall(
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        return NarrativeCallResult.SuspendedWithState(StringValue("remaining", context.symbolTable))
+    }
+
+    override suspend fun resumeCall(
+        arguments: List<RuntimeValue>,
+        response: FunctionResponse?,
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        return NarrativeCallResult.SuspendedWithState(context.suspendedState ?: NullValue)
+    }
+
+    override fun dispatch(
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallDispatchContext,
+        resume: (FunctionResponse?) -> Unit,
+    ) = Unit
+}
+
+class DispatchStateUpdateCallable(
+    private val scope: CoroutineScope,
+) : NarrativeCallable {
+    override val id: String = "dispatchStateUpdate"
+    override val receiverType: String? = null
+    override val returnType: String = "Unit"
+    override val typeParameters: List<TypeParameter> = emptyList()
+    override val valueParameters: List<CustomFunctionParameter> = emptyList()
+
+    override suspend fun startCall(
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        return NarrativeCallResult.SuspendedWithState(StringValue("initial", context.symbolTable))
+    }
+
+    override suspend fun resumeCall(
+        arguments: List<RuntimeValue>,
+        response: FunctionResponse?,
+        context: NarrativeCallContext,
+    ): NarrativeCallResult {
+        return NarrativeCallResult.Returned(NullValue)
+    }
+
+    override fun dispatch(
+        arguments: List<RuntimeValue>,
+        context: NarrativeCallDispatchContext,
+        resume: (FunctionResponse?) -> Unit,
+    ) {
+        scope.launch {
+            context.updateSuspendedState(StringValue("updated", context.symbolTable))
+        }
     }
 }
