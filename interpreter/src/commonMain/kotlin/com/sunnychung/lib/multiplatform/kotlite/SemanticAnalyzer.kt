@@ -1078,7 +1078,7 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
                     position = position,
                     name = it.second.declaredName,
                     type = it.second.typeNode!!,
-                    isMutable = it.second.setter != null
+                    isMutable = it.second.hasSetter
                 )
                 currentScope.registerTransformedSymbol(
                     position = position,
@@ -1823,9 +1823,9 @@ open class SemanticAnalyzer(val rootNode: ASTNode, val executionEnvironment: Exe
 //                }
                 currentScope.findExtensionPropertyByDeclarationIncludingSuperClasses(resolvedSubjectType, memberName)
                     ?.let {
-                        if (isCheckWriteAccess && it.second.setter == null) {
+                        if (isCheckWriteAccess && !it.second.hasSetter) {
                             throw SemanticException(position, "Setter for `$memberName` is not declared")
-                        } else if (!isCheckWriteAccess && it.second.getter == null) {
+                        } else if (!isCheckWriteAccess && !it.second.hasGetter) {
                             throw SemanticException(position, "Getter for `$memberName` is not declared")
                         }
                         transformedRefName = it.first

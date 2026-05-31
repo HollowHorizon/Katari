@@ -751,9 +751,25 @@ private fun ExtensionProperty.toKatariDefinitions(
     val receiverTypeStr = receiver
     val valueTypeStr = type
     val typeParams = typeParameters
+    val asyncGetter: (suspend (Interpreter, RuntimeValue, Map<String, DataType>) -> RuntimeValue)? =
+        suspendGetter ?: getter?.let { getterFn ->
+            val adapter: suspend (Interpreter, RuntimeValue, Map<String, DataType>) -> RuntimeValue =
+                { targetInterpreter, targetReceiver, targetTypeArgs ->
+                    getterFn(targetInterpreter, targetReceiver, targetTypeArgs)
+                }
+            adapter
+        }
+    val asyncSetter: (suspend (Interpreter, RuntimeValue, RuntimeValue, Map<String, DataType>) -> Unit)? =
+        suspendSetter ?: setter?.let { setterFn ->
+            val adapter: suspend (Interpreter, RuntimeValue, RuntimeValue, Map<String, DataType>) -> Unit =
+                { targetInterpreter, targetReceiver, value, targetTypeArgs ->
+                    setterFn(targetInterpreter, targetReceiver, value, targetTypeArgs)
+                }
+            adapter
+        }
 
     return listOfNotNull(
-        getter?.let { getterFn ->
+        asyncGetter?.let { getterFn ->
             object : NarrativeCallable {
                 override val id: String = declaredName
                 override val semanticFunctionDefinition: CustomFunctionDefinition? = null
@@ -784,7 +800,7 @@ private fun ExtensionProperty.toKatariDefinitions(
                 ) = throw IllegalStateException("Property getter cannot be dispatched")
             }
         },
-        setter?.let { setterFn ->
+        asyncSetter?.let { setterFn ->
             object : NarrativeCallable {
                 override val id: String = declaredName
                 override val semanticFunctionDefinition: CustomFunctionDefinition? = null

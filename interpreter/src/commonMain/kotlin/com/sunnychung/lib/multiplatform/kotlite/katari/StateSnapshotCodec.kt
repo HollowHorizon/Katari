@@ -229,6 +229,11 @@ class StateSnapshotCodec(
                         entries = iterator.entries.map { serializeValue(it, valueTable) as EnumValueSnapshot },
                         index = iterator.index,
                     )
+                } else if (value.value is NarrativeHostReferenceSnapshot) {
+                    value.value as? ValueSnapshot
+                        ?: throw IllegalArgumentException(
+                            "Host reference `${value.typeId}` must also be a ValueSnapshot to be snapshotted"
+                        )
                 } else {
                     @Suppress("UNCHECKED_CAST")
                     (valueCodecs.codec(value.typeId) as ValueCodec<ValueSnapshot>)
@@ -318,6 +323,11 @@ class StateSnapshotCodec(
             is RuntimePairValueSnapshot -> restoreRuntimeValue(snapshot, context, restoreReference)
             is RuntimeIteratorValueSnapshot -> restoreRuntimeValue(snapshot, context, restoreReference)
             is RuntimeMapEntryValueSnapshot -> restoreRuntimeValue(snapshot, context, restoreReference)
+            is NarrativeHostReferenceSnapshot -> NarrativeHostValue(
+                typeId = snapshot.typeId,
+                value = snapshot,
+                symbolTable = symbolTable(),
+            )
             else -> {
                 val codec = valueCodecs.codec(snapshot)
                 NarrativeHostValue(

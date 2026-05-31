@@ -10,9 +10,17 @@ class ExtensionProperty(
     val type: String,
     val getter: ((interpreter: Interpreter, receiver: RuntimeValue, typeArgs: Map<String, DataType>) -> RuntimeValue)? = null,
     val setter: ((interpreter: Interpreter, receiver: RuntimeValue, value: RuntimeValue, typeArgs: Map<String, DataType>) -> Unit)? = null,
+    val suspendGetter: (suspend (interpreter: Interpreter, receiver: RuntimeValue, typeArgs: Map<String, DataType>) -> RuntimeValue)? = null,
+    val suspendSetter: (suspend (interpreter: Interpreter, receiver: RuntimeValue, value: RuntimeValue, typeArgs: Map<String, DataType>) -> Unit)? = null,
 ) {
+    val hasGetter: Boolean
+        get() = getter != null || suspendGetter != null
+
+    val hasSetter: Boolean
+        get() = setter != null || suspendSetter != null
+
     init {
-        if (getter == null && setter == null) {
+        if (!hasGetter && !hasSetter) {
             throw IllegalArgumentException("Missing getter or setter")
         }
     }

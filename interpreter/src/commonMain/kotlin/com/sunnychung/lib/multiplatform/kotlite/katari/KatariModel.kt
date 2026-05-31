@@ -614,6 +614,12 @@ interface ValueCodec<S : ValueSnapshot> {
     suspend fun deserialize(snapshot: S, context: ValueRestoreContext): Any
 }
 
+interface NarrativeHostReferenceSnapshot {
+    val typeId: String
+
+    suspend fun restoreReference(context: ValueRestoreContext): Any
+}
+
 interface ValueRestoreContext
 
 data object EmptyValueRestoreContext : ValueRestoreContext
