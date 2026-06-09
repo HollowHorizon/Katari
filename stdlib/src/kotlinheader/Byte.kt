@@ -6,7 +6,6 @@ fun Long.toByte(): Byte
 fun Byte.toInt(): Int
 fun Byte.toLong(): Long
 fun Byte.toDouble(): Double
-fun Byte.toChar(): Char
 
 val ByteArray.lastIndex: Int get()
 val ByteArray.size: Int get()

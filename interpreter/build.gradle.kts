@@ -15,7 +15,7 @@ repositories {
 
 kotlin {
     jvm {
-        jvmToolchain(8)
+        //jvmToolchain(8)
         withJava()
         testRuns.named("test") {
             executionTask.configure {
@@ -74,17 +74,17 @@ kotlin {
         val commonMain by getting {
             dependencies {
                 implementation("co.touchlab:kermit:1.0.0")
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
-                implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.6.3")
-                implementation("org.jetbrains.kotlinx:kotlinx-serialization-cbor:1.6.3")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.11.0")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-cbor:1.11.0")
             }
         }
         val commonTest by getting {
             dependencies {
                 implementation(kotlin("test"))
                 findProject(":kotlite-stdlib")?.let { implementation(it) }
-                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
             }
         }
         val nonJsMain by creating {

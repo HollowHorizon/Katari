@@ -5,9 +5,9 @@ pluginManagement {
         google()
     }
     plugins {
-        kotlin("jvm") version "1.9.23"
-        kotlin("multiplatform") version "1.9.23"
-        kotlin("plugin.serialization") version "1.9.23"
+        kotlin("jvm") version "2.4.0"
+        kotlin("multiplatform") version "2.4.0"
+        kotlin("plugin.serialization") version "2.4.0"
     }
 }
 

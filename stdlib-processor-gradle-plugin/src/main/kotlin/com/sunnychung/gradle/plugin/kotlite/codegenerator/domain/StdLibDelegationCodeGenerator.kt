@@ -509,3 +509,4 @@ internal fun String.escape() =
         .replace("$", "\${'$'}")
         .replace("\"", "\\\"")
         .replace("\n", "\\n")
+        .replace("\r", "")

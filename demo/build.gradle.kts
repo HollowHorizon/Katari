@@ -10,7 +10,7 @@ repositories {
 
 kotlin {
     jvm {
-        jvmToolchain(8)
+        // jvmToolchain(8)
         withJava()
     }
 
@@ -39,9 +39,9 @@ kotlin {
         }
         val jvmMain by getting {
             dependencies {
-                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
-                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-                implementation("org.jetbrains.kotlinx:kotlinx-serialization-cbor:1.6.3")
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-cbor:1.11.0")
             }
         }
         val jsMain by getting

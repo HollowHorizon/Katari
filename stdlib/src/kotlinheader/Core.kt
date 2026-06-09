@@ -11,6 +11,10 @@ fun Double.toLong(): Long
 
 fun <T> Pair<T, T>.toList(): List<T>
 
+fun Double.toString(): String
+fun Int.toString(): String
+fun Long.toString(): String
+
 inline fun repeat(times: Int, action: (Int) -> Unit) {
     var index = 0
     while (index < times) {
