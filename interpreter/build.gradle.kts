@@ -1,3 +1,5 @@
+import org.gradle.internal.execution.caching.CachingState.enabled
+
 plugins {
     kotlin("multiplatform")
     kotlin("plugin.serialization")
@@ -16,7 +18,6 @@ repositories {
 kotlin {
     jvm {
         //jvmToolchain(8)
-        withJava()
         testRuns.named("test") {
             executionTask.configure {
                 useJUnitPlatform()
